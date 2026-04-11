@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.mp4
+*.jpg
+*.png
+!apps/backend/assets/**
+
+# Node (frontend)
+node_modules/
+.next/
+out/
+
+# Temp
+tmp/
+temp/

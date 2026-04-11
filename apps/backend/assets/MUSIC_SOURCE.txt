@@ -1,0 +1,6 @@
+Beta background music source
+----------------------------
+File: background.mp3
+Source URL: https://samplelib.com/lib/preview/mp3/sample-15s.mp3
+Source site: https://samplelib.com/
+Notes: Temporary royalty-free sample used for beta testing only.
