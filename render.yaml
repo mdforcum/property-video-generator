@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: property-video-generator
+    runtime: docker
+    dockerfilePath: ./apps/backend/Dockerfile
+    dockerContext: ./apps/backend
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GREATSCHOOLS_API_KEY
+        sync: false
+      - key: MAPBOX_TOKEN
+        sync: false
+      - key: ENABLE_BACKGROUND_AUDIO
+        value: "false"
+      - key: MAX_SOURCE_IMAGES
+        value: "24"
+      - key: MAX_JOB_SECONDS
+        value: "420"
+      - key: FFMPEG_TIMEOUT_SECONDS
+        value: "360"
+      - key: MAX_CONCURRENT_GENERATIONS
+        value: "1"
+      - key: FRONTEND_ORIGINS
+        value: "http://localhost:3000"
