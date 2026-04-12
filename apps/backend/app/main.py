@@ -1271,19 +1271,15 @@ def _draw_hero_text_overlay(
     )
 
     # --- Counter effect: create intermediate price frames ---
-    # Generate 5 intermediate price values that "count up" to the final price
-    import random
+    # Generate 2 intermediate price values that "count up" to the final price
+    # (kept to 2 frames to stay within Render's 2 GB memory limit)
     price_clean = price.replace("$", "").replace(",", "")
     counter_layers = []
     try:
         final_val = int(price_clean)
-        # Generate 5 counter values ramping up to final
         counter_values = [
-            int(final_val * 0.3),
-            int(final_val * 0.5),
-            int(final_val * 0.7),
-            int(final_val * 0.85),
-            int(final_val * 0.95),
+            int(final_val * 0.4),
+            int(final_val * 0.8),
         ]
         for cv in counter_values:
             cl = Image.new("RGBA", (width, height), (0, 0, 0, 0))
