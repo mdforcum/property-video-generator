@@ -154,19 +154,19 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 7. MAP CTA  (if we have a map image or always as placeholder)
+    # 7. MAP CTA  (always — renderer shows grid placeholder when
+    #    map_image is None, so the scene still looks good)
     # ---------------------------------------------------------------
-    if map_image is not None:
-        scenes.append(Scene(
-            scene_type=SceneType.MAP_CTA,
-            has_own_overlay=True,
-            data={
-                "map_image": map_image,
-                "address": address,
-                "price": price,
-                "template": template,
-            },
-        ))
+    scenes.append(Scene(
+        scene_type=SceneType.MAP_CTA,
+        has_own_overlay=True,
+        data={
+            "map_image": map_image,   # may be None — renderer handles it
+            "address": address,
+            "price": price,
+            "template": template,
+        },
+    ))
 
     # ---------------------------------------------------------------
     # 8. OUTRO  (always last)

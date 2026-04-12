@@ -1600,6 +1600,10 @@ def build_video(
                 duration=transition_duration,
                 offset=offset,
             )
+            # Force constant frame rate after each xfade — chaining many
+            # xfade filters causes FFmpeg to lose timebase metadata, which
+            # surfaces as "current rate of 1/0 is invalid" on later filters.
+            video = video.filter("fps", 30)
             previous_transition = tr
             elapsed += durations[i] - transition_duration
         total = sum(durations) - transition_duration * (len(streams) - 1)
