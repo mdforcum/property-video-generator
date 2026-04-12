@@ -1182,6 +1182,7 @@ def _draw_hero_text_overlay(
     price: str,
     template: str = "new_listing",
     beds: str = "",
+    baths: str = "",
     city: str = "",
     address_short: str = "",
 ) -> List[Image.Image]:
@@ -1210,7 +1211,8 @@ def _draw_hero_text_overlay(
         city = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
 
     bed_part = f"{beds} bedroom" if beds else "home"
-    headline = f"New to market — {bed_part} in {city} at {address_short}" if address_short else f"New to market — {bed_part} in {city}"
+    bath_part = f", {baths} bath" if baths else ""
+    headline = f"New to market - {bed_part}{bath_part} in {city} at {address_short}" if address_short else f"New to market - {bed_part}{bath_part} in {city}"
 
     margin = 80
     max_w = width - margin * 2
@@ -1988,6 +1990,7 @@ def process_video_task(
 
         # Save lightweight stats for hero overlay before freeing enrichment
         _hero_beds = (enrichment.get("stats") or {}).get("beds", "")
+        _hero_baths = (enrichment.get("stats") or {}).get("baths", "")
 
         # --- FREE photos & enrichment to reclaim memory ---
         # NOTE: Do NOT close enrichment["map_image"] here — scenes hold
@@ -2069,6 +2072,7 @@ def process_video_task(
                 REEL_WIDTH, REEL_HEIGHT, address, price,
                 template=template,
                 beds=_hero_beds,
+                baths=_hero_baths,
                 address_short=_address_short,
             )
             for li, layer_img in enumerate(overlay_layers):

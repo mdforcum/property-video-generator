@@ -661,23 +661,24 @@ def _render_schools_card(scene: Scene) -> Image.Image:
     if county:
         draw.text((160, 390), county.upper(), fill=LIGHT_TEXT, font=sub_font)
 
-    # "MILES" header
-    miles_font = _font(28, "medium")
-    miles_x = w - 120
-    draw.text((miles_x - 20, 460), "MILES", fill=LIGHT_TEXT, font=miles_font)
+    # Column headers
+    label_font = _font(28, "medium")
+    draw.text((w - 260, 460), "RATING", fill=LIGHT_TEXT, font=label_font)
+    draw.text((w - 120, 460), "MI", fill=LIGHT_TEXT, font=label_font)
 
     # Divider line
     draw.line([(80, 500), (w - 80, 500)], fill=(220, 220, 220, 255), width=2)
 
     # School cards
     schools = scene.data.get("schools", [])
-    name_font = _font(38, "medium")
-    dist_font = _font(52, "bold")
-    school_icon_font = _font(28, "regular")
+    name_font = _font(36, "medium")
+    detail_font = _font(26, "regular")
+    dist_font = _font(44, "bold")
+    rating_font = _font(44, "bold")
 
     card_y = 540
-    card_h = 120
-    card_gap = 24
+    card_h = 140
+    card_gap = 20
 
     for i, school in enumerate(schools[:5]):
         if card_y + card_h > h - 200:
@@ -692,22 +693,64 @@ def _render_schools_card(scene: Scene) -> Image.Image:
         # School icon (small building)
         icon_x = 100
         icon_cy = card_y + card_h // 2
-        _draw_icon_school(draw, icon_x, icon_cy, size=36, fill=MID_TEXT)
+        _draw_icon_school(draw, icon_x, icon_cy - 10, size=36, fill=MID_TEXT)
 
-        # School name
+        # School name (top line)
         name = school.get("name", "School")
-        name_lines = _wrap(draw, name, name_font, card_w - 280, max_lines=1)
+        name_lines = _wrap(draw, name, name_font, card_w - 340, max_lines=1)
         if name_lines:
-            draw.text((140, card_y + card_h // 2 - 18), name_lines[0],
+            draw.text((145, card_y + 20), name_lines[0],
                       fill=DARK_TEXT, font=name_font)
 
-        # Distance (right side, large, gradient-colored)
+        # School type + grades (bottom line)
+        school_type = school.get("type", "")
+        grades = school.get("grades", "")
+        detail_parts = []
+        if school_type:
+            detail_parts.append(str(school_type).title())
+        if grades:
+            detail_parts.append(f"Grades {grades}")
+        if detail_parts:
+            detail_text = " · ".join(detail_parts)
+            draw.text((145, card_y + 66), detail_text,
+                      fill=LIGHT_TEXT, font=detail_font)
+
+        # Rating (right side)
+        rating = school.get("rating", "")
+        if rating:
+            rating_str = str(rating)
+            rw = _text_w(draw, rating_str, rating_font)
+            rx = w - 250 - rw // 2
+            # Rating pill
+            pill_w, pill_h = rw + 24, 52
+            pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
+            pill_draw = ImageDraw.Draw(pill)
+            # Color by rating: green >= 7, amber >= 4, red < 4
+            try:
+                rv = float(rating)
+            except (ValueError, TypeError):
+                rv = 5
+            if rv >= 7:
+                pill_color = (16, 185, 129, 220)  # emerald-500
+            elif rv >= 4:
+                pill_color = (245, 158, 11, 220)   # amber-500
+            else:
+                pill_color = (239, 68, 68, 220)     # red-500
+            pill_draw.rounded_rectangle(
+                (0, 0, pill_w - 1, pill_h - 1), radius=10,
+                fill=pill_color,
+            )
+            canvas.alpha_composite(pill, (rx - 12, card_y + card_h // 2 - 26))
+            draw = ImageDraw.Draw(canvas)
+            draw.text((rx, card_y + card_h // 2 - 20), rating_str,
+                      fill=(255, 255, 255, 255), font=rating_font)
+
+        # Distance (far right, large, gradient-colored)
         distance = school.get("distance", "")
         if distance:
             dist_str = str(distance)
             dw = _text_w(draw, dist_str, dist_font)
-            # Use gradient teal color for distance
-            draw.text((w - 120 - dw, card_y + card_h // 2 - 24), dist_str,
+            draw.text((w - 110 - dw, card_y + card_h // 2 - 20), dist_str,
                       fill=GRAD_START, font=dist_font)
 
         card_y += card_h + card_gap

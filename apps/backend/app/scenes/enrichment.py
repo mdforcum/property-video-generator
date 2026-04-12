@@ -325,8 +325,8 @@ def fetch_static_map(
     if mapbox_token:
         try:
             url = (
-                f"https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/"
-                f"pin-l+3b82f6({lng},{lat})/"
+                f"https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/"
+                f"pin-l+0d9488({lng},{lat})/"
                 f"{lng},{lat},{zoom},0/"
                 f"{width}x{height}@2x"
                 f"?access_token={mapbox_token}"
