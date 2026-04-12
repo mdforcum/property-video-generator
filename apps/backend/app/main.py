@@ -1137,84 +1137,96 @@ def _draw_hero_text_overlay(
     address: str,
     price: str,
     template: str = "new_listing",
+    beds: str = "",
+    city: str = "",
 ) -> Image.Image:
-    """Draw a minimal transparent overlay with address + price for the hero photo.
+    """PropertySimple-style hero overlay — large bold text with price pill.
 
-    This overlay is composited with fade-in/fade-out timing by FFmpeg,
-    creating an animated text pop-in effect on the first scene.
+    Layout:  "New {beds}-bedroom available in {city} for {price}"
+    where the price gets a purple highlight pill behind it.
     """
     base = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(base)
 
-    template_key = _normalize_template(template)
-    style = FRAME_TEMPLATES[template_key]
-    primary = style["primary"][:3]
+    ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+    # Try Poppins first, fall back to system fonts
+    headline_font = None
+    for fpath in [
+        ASSETS_DIR / "Poppins-Bold.ttf",
+        Path("/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ]:
+        try:
+            headline_font = ImageFont.truetype(str(fpath), 82)
+            break
+        except (OSError, IOError):
+            continue
+    if headline_font is None:
+        headline_font = _load_font(82, bold=True)
 
-    # Fonts
-    price_font = _load_font(72, bold=True)
-    addr_font = _load_font(38, bold=True)
-    addr_small_font = _load_font(30, bold=False)
+    # Build the PS-style headline
+    # "New 4-bedroom available in Effingham for $249,900"
+    if not city:
+        parts = [p.strip() for p in address.split(",")]
+        city = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
 
-    # Bottom gradient for text readability (fast 1-pixel-wide column, then resize)
-    grad_h = 500
-    grad_col = Image.new("L", (1, grad_h))
-    for y in range(grad_h):
-        alpha = int(200 * (y / grad_h) ** 1.5)
-        grad_col.putpixel((0, y), min(alpha, 200))
-    grad_col = grad_col.resize((width, grad_h), Image.Resampling.BILINEAR)
-    gradient = Image.new("RGBA", (width, grad_h), (0, 0, 0, 255))
-    gradient.putalpha(grad_col)
-    base.alpha_composite(gradient, (0, height - grad_h))
+    bed_part = f"{beds}-bedroom" if beds else "home"
+    headline = f"New {bed_part} available in {city} for"
 
-    # Price — large, bottom area
-    price_y = height - 180
-    price_bbox = draw.textbbox((0, 0), price, font=price_font)
-    price_w = price_bbox[2] - price_bbox[0]
+    # Slight dark overlay for text readability
+    dark_layer = Image.new("RGBA", (width, height), (0, 0, 0, 60))
+    base.alpha_composite(dark_layer)
+    draw = ImageDraw.Draw(base)
+
+    # Word-wrap headline
+    margin = 80
+    max_w = width - margin * 2
+    lines = _wrap_text(draw, headline, headline_font, max_w, max_lines=5)
+
+    # Position text in center-left
+    line_height = 100
+    total_text_h = len(lines) * line_height + 120  # extra for price
+    start_y = (height - total_text_h) // 2
+
+    for line in lines:
+        draw.text(
+            (margin, start_y), line,
+            fill=(255, 255, 255, 255), font=headline_font,
+            stroke_width=3, stroke_fill=(0, 0, 0, 100),
+        )
+        start_y += line_height
+
+    # Price with purple highlight pill
+    price_y = start_y + 10
+    price_font_obj = headline_font  # same size for consistency
+    pbbox = draw.textbbox((0, 0), price, font=price_font_obj)
+    pw = pbbox[2] - pbbox[0]
+    ph = pbbox[3] - pbbox[1]
+
+    pill_pad_x = 20
+    pill_pad_y = 8
+    pill_w = pw + pill_pad_x * 2
+    pill_h = ph + pill_pad_y * 2 + 10
+
+    # Purple pill
+    pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
+    pill_draw = ImageDraw.Draw(pill)
+    pill_draw.rounded_rectangle(
+        (0, 0, pill_w - 1, pill_h - 1),
+        radius=14,
+        fill=(147, 51, 234, 220),  # purple
+    )
+    base.alpha_composite(pill, (margin, price_y - pill_pad_y))
+    draw = ImageDraw.Draw(base)
+
     draw.text(
-        ((width - price_w) // 2, price_y),
+        (margin + pill_pad_x, price_y),
         price,
         fill=(255, 255, 255, 255),
-        font=price_font,
-        stroke_width=2,
-        stroke_fill=(0, 0, 0, 160),
-    )
-
-    # Accent line above price
-    line_w = 60
-    line_y = price_y - 24
-    draw.rounded_rectangle(
-        ((width - line_w) // 2, line_y, (width + line_w) // 2, line_y + 3),
-        radius=2,
-        fill=(*primary, 220),
-    )
-
-    # Address — above the accent line
-    addr_parts = [p.strip() for p in address.split(",")]
-    street = addr_parts[0] if addr_parts else address
-    city_state = ", ".join(addr_parts[1:]) if len(addr_parts) > 1 else ""
-
-    street_bbox = draw.textbbox((0, 0), street, font=addr_font)
-    street_w = street_bbox[2] - street_bbox[0]
-    draw.text(
-        ((width - street_w) // 2, line_y - 75),
-        street,
-        fill=(255, 255, 255, 255),
-        font=addr_font,
+        font=price_font_obj,
         stroke_width=1,
-        stroke_fill=(0, 0, 0, 120),
+        stroke_fill=(0, 0, 0, 60),
     )
-
-    if city_state:
-        cs_bbox = draw.textbbox((0, 0), city_state, font=addr_small_font)
-        cs_w = cs_bbox[2] - cs_bbox[0]
-        draw.text(
-            ((width - cs_w) // 2, line_y - 40),
-            city_state,
-            fill=(220, 220, 220, 240),
-            font=addr_small_font,
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 100),
-        )
 
     return base
 
@@ -1916,6 +1928,9 @@ def process_video_task(
             map_image=enrichment["map_image"],
         )
 
+        # Save lightweight stats for hero overlay before freeing enrichment
+        _hero_beds = (enrichment.get("stats") or {}).get("beds", "")
+
         # --- FREE photos & enrichment to reclaim memory ---
         # NOTE: Do NOT close enrichment["map_image"] here — scenes hold
         # a reference to the same PIL Image and need it during rendering.
@@ -1977,6 +1992,7 @@ def process_video_task(
             overlay_image = _draw_hero_text_overlay(
                 REEL_WIDTH, REEL_HEIGHT, address, price,
                 template=template,
+                beds=_hero_beds,
             )
             overlay_image.save(overlay_path)
             overlay_image.close()

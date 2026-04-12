@@ -1,17 +1,22 @@
-"""Scene list builder.
+"""Scene list builder — v3 (PropertySimple-inspired flow).
 
-Takes scraped listing data (address, price, photos, metadata) and
-assembles an ordered list of Scene objects that define the video's
-full storyboard.
-
-The builder is the single place where scene ORDER, scene SELECTION,
-and scene DATA binding happen.  Renderers don't know about the listing;
-the builder packages what each renderer needs in scene.data.
+Scene order matches the PS video structure:
+  1. Hero photo
+  2. Stats overlay (gradient-tinted photo with sqft / beds / baths)
+  3. Interior photos (first batch)
+  4. Description card (bold text over dimmed photo)
+  5. Interior photos (second batch)
+  6. Features card (lot size / year built callout over photo)
+  7. Map infographic (white bg, circular crop)
+  8. Schools infographic (white bg, gradient-bordered cards)
+  9. CTA card (gradient bg, "Thinking of buying?" + agent name)
+ 10. Outro (white bg, agent headshot, phone pill)
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
@@ -19,6 +24,26 @@ from PIL import Image
 from .models import Scene, SceneType, MotionProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_city(address: str) -> str:
+    """Best-effort city extraction from an address string."""
+    parts = [p.strip() for p in address.split(",")]
+    if len(parts) >= 2:
+        # "801 Cleveland Street, Effingham, IL 62401" → "Effingham"
+        return parts[-2] if len(parts) >= 3 else parts[1].split()[0]
+    return ""
+
+
+def _extract_county(address: str, schools: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Try to determine county from schools data or address."""
+    # Schools often include district/county info
+    if schools:
+        for s in schools:
+            district = s.get("district", "")
+            if district:
+                return district
+    return ""
 
 
 def build_scene_list(
@@ -29,32 +54,25 @@ def build_scene_list(
     template: str = "new_listing",
     branding: Optional[Dict[str, str]] = None,
     branding_assets: Optional[Dict[str, Optional[Image.Image]]] = None,
-    # --- Optional enrichment data (Phase 2) ---
+    # --- Optional enrichment data ---
     stats: Optional[Dict[str, str]] = None,
     description: Optional[str] = None,
     features: Optional[List[str]] = None,
     schools: Optional[List[Dict[str, Any]]] = None,
     map_image: Optional[Image.Image] = None,
 ) -> List[Scene]:
-    """Build the ordered scene list for a listing video.
-
-    Required args produce the baseline video (hero + interior photos + outro)
-    which matches the current auto-reel output.  Optional enrichment args
-    unlock the new data-card scenes when available.
-
-    Returns:
-        Ordered list of Scene objects ready for rendering and video assembly.
-    """
+    """Build the ordered scene list for a listing video."""
     branding = branding or {}
     branding_assets = branding_assets or {}
     scenes: List[Scene] = []
 
     if not photos:
-        logger.warning("build_scene_list called with no photos — returning empty scene list")
+        logger.warning("build_scene_list: no photos — returning empty list")
         return scenes
 
-    # Grab the first photo as potential blurred background for data cards
-    bg_image = photos[0] if photos else None
+    bg_image = photos[0]
+    city = _extract_city(address)
+    county = _extract_county(address, schools)
 
     # ---------------------------------------------------------------
     # 1. HERO PHOTO  (always first)
@@ -66,7 +84,7 @@ def build_scene_list(
     ))
 
     # ---------------------------------------------------------------
-    # 2. STATS CARD  (if we have stats data)
+    # 2. STATS OVERLAY  (gradient-tinted photo with key stats)
     # ---------------------------------------------------------------
     if stats and any(stats.values()):
         scenes.append(Scene(
@@ -82,16 +100,13 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 3. INTERIOR PHOTOS  (photos 2..N, interleaved with data cards)
+    # 3. INTERIOR PHOTOS — first batch
     # ---------------------------------------------------------------
     interior_photos = photos[1:]
-
-    # Split interiors into two groups for interleaving
     mid = len(interior_photos) // 2
     first_batch = interior_photos[:mid] if mid > 0 else interior_photos
     second_batch = interior_photos[mid:] if mid > 0 else []
 
-    # First batch of interior photos
     for photo in first_batch:
         scenes.append(Scene(
             scene_type=SceneType.INTERIOR_PHOTO,
@@ -100,22 +115,29 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 4. DESCRIPTION CARD  (between photo batches if available)
+    # 4. DESCRIPTION CARD  (bold text over dimmed photo)
     # ---------------------------------------------------------------
     if description and description.strip():
+        # Use a different photo for visual variety if available
+        desc_bg = photos[1] if len(photos) > 1 else bg_image
         scenes.append(Scene(
             scene_type=SceneType.DESCRIPTION_CARD,
             has_own_overlay=True,
+            duration=4.5,
             data={
                 "description": description,
                 "address": address,
-                "price": price,
+                "city": city,
+                "sqft": (stats or {}).get("sqft", ""),
+                "lot_size": (stats or {}).get("lot_size", ""),
                 "template": template,
-                "bg_image": bg_image,
+                "bg_image": desc_bg,
             },
         ))
 
-    # Second batch of interior photos
+    # ---------------------------------------------------------------
+    # 5. INTERIOR PHOTOS — second batch
+    # ---------------------------------------------------------------
     for photo in second_batch:
         scenes.append(Scene(
             scene_type=SceneType.INTERIOR_PHOTO,
@@ -124,22 +146,41 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 5. FEATURES CARD  (if we have features)
+    # 6. FEATURES CARD  (lot size / year built callout on photo)
     # ---------------------------------------------------------------
-    if features and len(features) >= 2:
+    if stats and (stats.get("lot_size") or stats.get("year_built")):
+        feat_bg = photos[-1] if len(photos) > 1 else bg_image
         scenes.append(Scene(
             scene_type=SceneType.FEATURES_CARD,
             has_own_overlay=True,
             data={
-                "features": features,
-                "address": address,
+                "lot_size": stats.get("lot_size", ""),
+                "year_built": stats.get("year_built", ""),
+                "garage": stats.get("garage", ""),
+                "features": features or [],
                 "template": template,
-                "bg_image": bg_image,
+                "bg_image": feat_bg,
             },
         ))
 
     # ---------------------------------------------------------------
-    # 6. SCHOOLS CARD  (if we have school data)
+    # 7. MAP INFOGRAPHIC  (white bg, circular map crop)
+    # ---------------------------------------------------------------
+    scenes.append(Scene(
+        scene_type=SceneType.MAP_CTA,
+        has_own_overlay=True,
+        data={
+            "map_image": map_image,
+            "address": address,
+            "price": price,
+            "city": city,
+            "county": county,
+            "template": template,
+        },
+    ))
+
+    # ---------------------------------------------------------------
+    # 8. SCHOOLS INFOGRAPHIC  (white bg, gradient-bordered cards)
     # ---------------------------------------------------------------
     if schools and len(schools) >= 1:
         scenes.append(Scene(
@@ -148,28 +189,31 @@ def build_scene_list(
             data={
                 "schools": schools,
                 "address": address,
+                "city": city,
+                "county": county,
                 "template": template,
-                "bg_image": bg_image,
             },
         ))
 
     # ---------------------------------------------------------------
-    # 7. MAP CTA  (always — renderer shows grid placeholder when
-    #    map_image is None, so the scene still looks good)
+    # 9. CTA CARD  (gradient bg, "Thinking of buying?" + agent)
     # ---------------------------------------------------------------
+    agent_name = (branding.get("agent_name") or "").strip()
     scenes.append(Scene(
-        scene_type=SceneType.MAP_CTA,
+        scene_type=SceneType.CTA_CARD,
         has_own_overlay=True,
         data={
-            "map_image": map_image,   # may be None — renderer handles it
+            "map_image": map_image,
             "address": address,
-            "price": price,
+            "city": city,
+            "county": county,
+            "agent_name": agent_name,
             "template": template,
         },
     ))
 
     # ---------------------------------------------------------------
-    # 8. OUTRO  (always last)
+    # 10. OUTRO  (white bg, agent headshot, gradient phone pill)
     # ---------------------------------------------------------------
     scenes.append(Scene(
         scene_type=SceneType.OUTRO,

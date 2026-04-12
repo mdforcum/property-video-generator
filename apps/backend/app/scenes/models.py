@@ -31,6 +31,7 @@ class SceneType(str, Enum):
     FEATURES_CARD = "features_card"    # Key features / amenities list
     SCHOOLS_CARD = "schools_card"      # Nearby schools infographic
     MAP_CTA = "map_cta"               # Map image + call-to-action text
+    CTA_CARD = "cta_card"             # "Thinking of buying?" CTA card
 
     # --- Branding scenes ---
     OUTRO = "outro"                    # Contact card / outro (existing)
@@ -53,6 +54,7 @@ DEFAULT_DURATIONS: Dict[SceneType, float] = {
     SceneType.FEATURES_CARD: 3.5,
     SceneType.SCHOOLS_CARD: 3.5,
     SceneType.MAP_CTA: 3.0,
+    SceneType.CTA_CARD: 3.5,
     SceneType.OUTRO: 3.0,
 }
 
@@ -65,6 +67,7 @@ DEFAULT_MOTION: Dict[SceneType, MotionProfile] = {
     SceneType.FEATURES_CARD: MotionProfile.STATIC,
     SceneType.SCHOOLS_CARD: MotionProfile.STATIC,
     SceneType.MAP_CTA: MotionProfile.SLOW_ZOOM,
+    SceneType.CTA_CARD: MotionProfile.STATIC,
     SceneType.OUTRO: MotionProfile.STATIC,
 }
 
