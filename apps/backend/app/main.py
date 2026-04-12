@@ -1600,10 +1600,10 @@ def build_video(
                 duration=transition_duration,
                 offset=offset,
             )
-            # Force constant frame rate after each xfade — chaining many
-            # xfade filters causes FFmpeg to lose timebase metadata, which
-            # surfaces as "current rate of 1/0 is invalid" on later filters.
-            video = video.filter("fps", 30)
+            # Force constant timebase and frame rate after each xfade —
+            # chaining many xfade filters causes FFmpeg to lose timebase
+            # metadata, surfacing as "current rate of 1/0 is invalid".
+            video = video.filter("settb", "1/30").filter("fps", 30)
             previous_transition = tr
             elapsed += durations[i] - transition_duration
         total = sum(durations) - transition_duration * (len(streams) - 1)
@@ -1650,7 +1650,7 @@ def build_video(
         video_only_path = out_path.with_name(f"{out_path.stem}_video_only.mp4")
 
     try:
-        (
+        ffmpeg_stream = (
             ffmpeg
             .output(
                 video,
@@ -1664,8 +1664,11 @@ def build_video(
                 an=None,
             )
             .overwrite_output()
-            .run(capture_stdout=True, capture_stderr=True)
         )
+        # Log the compiled FFmpeg command for debugging
+        cmd_args = ffmpeg_stream.compile()
+        logger.info("FFmpeg command: %s", " ".join(cmd_args))
+        ffmpeg_stream.run(capture_stdout=True, capture_stderr=True)
 
         if music_enabled:
             audio = (
@@ -1882,6 +1885,12 @@ def process_video_task(
         # --- Build video ---
         _set_step("build_video")
         _set_job_progress(job_id, 80)
+        logger.info(
+            "build_video: %d scenes — %s | durations: %s",
+            len(scenes),
+            [f"{s.scene_type.value}({s.motion.value})" for s in scenes],
+            [s.duration for s in scenes],
+        )
         video_path = temp_dir / f"{job_id}.mp4"
         _ensure_within_runtime_limit()
         build_video(
