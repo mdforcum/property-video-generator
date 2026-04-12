@@ -1270,48 +1270,9 @@ def _draw_hero_text_overlay(
         stroke_width=1, stroke_fill=(0, 0, 0, 60),
     )
 
-    # --- Counter effect: create intermediate price frames ---
-    # Generate 2 intermediate price values that "count up" to the final price
-    # (kept to 2 frames to stay within Render's 2 GB memory limit)
-    price_clean = price.replace("$", "").replace(",", "")
-    counter_layers = []
-    try:
-        final_val = int(price_clean)
-        counter_values = [
-            int(final_val * 0.4),
-            int(final_val * 0.8),
-        ]
-        for cv in counter_values:
-            cl = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            cd = ImageDraw.Draw(cl)
-            counter_text = f"${cv:,}"
-            cbbox = cd.textbbox((0, 0), counter_text, font=headline_font)
-            cpw = cbbox[2] - cbbox[0]
-            cph = cbbox[3] - cbbox[1]
-            cp_y_offset = cbbox[1]
-            c_pill_w = pw + pill_pad_x * 2  # Keep same pill width as final
-            c_pill_h = ph + pill_pad_y * 2
-            c_pill = Image.new("RGBA", (c_pill_w, c_pill_h), (0, 0, 0, 0))
-            c_pill_draw = ImageDraw.Draw(c_pill)
-            c_pill_draw.rounded_rectangle(
-                (0, 0, c_pill_w - 1, c_pill_h - 1), radius=14,
-                fill=(13, 148, 136, 220),
-            )
-            cl.alpha_composite(c_pill, (pill_x, pill_y))
-            cd = ImageDraw.Draw(cl)
-            # Center counter text in the same pill
-            c_text_x = pill_x + (c_pill_w - cpw) // 2
-            c_text_y = pill_y + pill_pad_y - cp_y_offset
-            cd.text(
-                (c_text_x, c_text_y), counter_text,
-                fill=(255, 255, 255, 255), font=headline_font,
-                stroke_width=1, stroke_fill=(0, 0, 0, 60),
-            )
-            counter_layers.append(cl)
-    except (ValueError, TypeError):
-        pass  # If price isn't numeric, skip counter
-
-    return [layer1] + counter_layers + [layer2]
+    # NOTE: Counter effect removed — each extra FFmpeg overlay adds ~500 MB
+    # and Render Standard only has 2 GB. Keeping 2 overlays (headline + price).
+    return [layer1, layer2]
 
 
 def draw_overlay_layer(
@@ -1803,30 +1764,9 @@ def build_video(
     # Hero text staggered overlays (headline fades in first, price pill follows)
     if overlay_frames:
         hero_dur = content_scenes[0].duration if content_scenes else 3.0
-        num_overlays = len(overlay_frames)
-        # Build stagger timing: headline at 0.2s, counter layers rapid, final price after
-        if num_overlays <= 2:
-            stagger_starts = [0.2, 0.8]
-        else:
-            stagger_starts = [0.2]  # headline
-            counter_count = num_overlays - 2
-            counter_start = 0.8
-            counter_interval = 0.12
-            for ci in range(counter_count):
-                stagger_starts.append(counter_start + ci * counter_interval)
-            stagger_starts.append(counter_start + counter_count * counter_interval + 0.08)
-
+        stagger_starts = [0.2, 0.8]
         for oi, opath in enumerate(overlay_frames):
             fade_in_start = stagger_starts[oi] if oi < len(stagger_starts) else 0.2 + oi * 0.5
-            is_counter = 0 < oi < num_overlays - 1 and num_overlays > 2
-            fade_dur_in = 0.08 if is_counter else 0.3
-            if is_counter:
-                next_start = stagger_starts[oi + 1] if oi + 1 < len(stagger_starts) else fade_in_start + 0.15
-                out_start = next_start - 0.04
-                fade_dur_out = 0.04
-            else:
-                out_start = hero_dur - 0.6
-                fade_dur_out = 0.4
             overlay_stream = (
                 ffmpeg
                 .input(str(opath), loop=1, t=hero_dur)
@@ -1835,8 +1775,8 @@ def build_video(
                 .filter("trim", duration=hero_dur)
                 .filter("setpts", "PTS-STARTPTS")
                 .filter("fps", 30)
-                .filter("fade", type="in", start_time=fade_in_start, duration=fade_dur_in, alpha=1)
-                .filter("fade", type="out", start_time=out_start, duration=fade_dur_out, alpha=1)
+                .filter("fade", type="in", start_time=fade_in_start, duration=0.3, alpha=1)
+                .filter("fade", type="out", start_time=hero_dur - 0.6, duration=0.4, alpha=1)
             )
             video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=0, eof_action="pass")
 
