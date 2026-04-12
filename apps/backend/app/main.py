@@ -1,3 +1,4 @@
+import gc
 import os
 import re
 import shutil
@@ -53,7 +54,7 @@ OFFICE_ADDRESS_BY_CITY = {
 }
 TOLL_FREE_PHONE = "855-215-3400"
 ENABLE_BACKGROUND_AUDIO = os.getenv("ENABLE_BACKGROUND_AUDIO", "false").strip().lower() in {"1", "true", "yes", "on"}
-MAX_SOURCE_IMAGES = max(1, int(os.getenv("MAX_SOURCE_IMAGES", "24")))
+MAX_SOURCE_IMAGES = max(1, int(os.getenv("MAX_SOURCE_IMAGES", "5")))
 MAX_JOB_SECONDS = max(60, int(os.getenv("MAX_JOB_SECONDS", "420")))
 FFMPEG_TIMEOUT_SECONDS = max(30, int(os.getenv("FFMPEG_TIMEOUT_SECONDS", "360")))
 MAX_CONCURRENT_GENERATIONS = max(1, int(os.getenv("MAX_CONCURRENT_GENERATIONS", "1")))
@@ -1790,6 +1791,16 @@ def process_video_task(
                 photos.append(img)
             except Exception:
                 continue
+            finally:
+                # Remove raw download from disk immediately
+                try:
+                    raw.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # Free the raw HTML now that scraping + enrichment are done
+        del raw_html
+        gc.collect()
 
         if not photos:
             raise ValueError("Image download failed")
@@ -1811,6 +1822,13 @@ def process_video_task(
             map_image=enrichment["map_image"],
         )
 
+        # --- FREE photos & enrichment to reclaim memory ---
+        del photos
+        if enrichment.get("map_image") is not None:
+            enrichment["map_image"].close()
+        del enrichment
+        gc.collect()
+
         # --- Render scene frames ---
         _set_step("render_scene_frames")
         _set_job_progress(job_id, 50)
@@ -1828,6 +1846,19 @@ def process_video_task(
                 frame.save(frame_path, quality=95)
             scene.frame_path = frame_path
 
+            # --- FREE rendered frame + scene data images to reclaim memory ---
+            if frame is not scene.rendered_frame:
+                frame.close()
+            if scene.rendered_frame is not None:
+                scene.rendered_frame.close()
+                scene.rendered_frame = None
+            # Close any PIL images stored in scene.data
+            for key, val in list(scene.data.items()):
+                if isinstance(val, Image.Image):
+                    val.close()
+                    scene.data[key] = None
+        gc.collect()
+
         # --- Render global overlay (for photo scenes) ---
         _set_step("render_overlay")
         _set_job_progress(job_id, 72)
@@ -1842,6 +1873,9 @@ def process_video_task(
                 branding_assets=branding_assets,
             )
             overlay_image.save(overlay_path)
+            overlay_image.close()
+            del overlay_image
+            gc.collect()
 
         # --- Build video ---
         _set_step("build_video")
@@ -1863,6 +1897,8 @@ def process_video_task(
         _ensure_within_runtime_limit()
         video_bytes = video_path.read_bytes()
         upload_video_to_supabase(storage_path, video_bytes)
+        del video_bytes
+        gc.collect()
 
         _set_step("complete")
         _set_job_progress(job_id, 100)
