@@ -1576,37 +1576,65 @@ def build_video(
         streams.append(stream)
         durations.append(scene.duration)
 
-    # Compose streams with xfade transitions
-    if len(streams) == 1:
-        video = streams[0]
-        total = durations[0]
-    else:
-        video = streams[0]
-        elapsed = durations[0]
+    # Compose streams with transitions.
+    #
+    # We batch scenes into groups and use xfade within each group, then
+    # concat the groups.  This avoids FFmpeg's filter-graph depth issue
+    # that causes "current rate of 1/0 is invalid" when chaining 12+
+    # xfade filters in a single filter graph.
+    XFADE_BATCH = 6  # max scenes per xfade group
+
+    def _xfade_group(group_streams, group_durations, group_scenes, start_index):
+        """Chain xfade transitions within a small group of streams."""
+        if len(group_streams) == 1:
+            return group_streams[0], group_durations[0]
+
+        video = group_streams[0]
+        elapsed = group_durations[0]
         previous_transition = "fade"
-        for i in range(1, len(streams)):
+        for i in range(1, len(group_streams)):
             offset = elapsed - transition_duration
-            tr = content_scenes[i].transition
+            tr = group_scenes[i].transition
             if tr is None:
-                tr_rng = _rng_for_scene(i, content_scenes[i])
+                tr_rng = _rng_for_scene(start_index + i, group_scenes[i])
                 tr = tr_rng.choice(transition_candidates)
                 if tr == previous_transition:
                     tr = transition_candidates[(transition_candidates.index(tr) + 1) % len(transition_candidates)]
 
             video = ffmpeg.filter(
-                [video, streams[i]],
+                [video, group_streams[i]],
                 "xfade",
                 transition=tr,
                 duration=transition_duration,
                 offset=offset,
             )
-            # Force constant timebase and frame rate after each xfade —
-            # chaining many xfade filters causes FFmpeg to lose timebase
-            # metadata, surfacing as "current rate of 1/0 is invalid".
-            video = video.filter("settb", "1/30").filter("fps", 30)
             previous_transition = tr
-            elapsed += durations[i] - transition_duration
-        total = sum(durations) - transition_duration * (len(streams) - 1)
+            elapsed += group_durations[i] - transition_duration
+        group_total = sum(group_durations) - transition_duration * (len(group_streams) - 1)
+        return video, group_total
+
+    if len(streams) <= XFADE_BATCH:
+        # Small scene count — single xfade chain is fine
+        video, total = _xfade_group(streams, durations, content_scenes, 0)
+    else:
+        # Split into batches, xfade within each batch, then concat batches
+        group_videos = []
+        group_totals = []
+        idx = 0
+        while idx < len(streams):
+            end = min(idx + XFADE_BATCH, len(streams))
+            g_video, g_total = _xfade_group(
+                streams[idx:end], durations[idx:end],
+                content_scenes[idx:end], idx,
+            )
+            # Normalize format for concat
+            g_video = g_video.filter("format", "yuv420p")
+            group_videos.append(g_video)
+            group_totals.append(g_total)
+            idx = end
+
+        video = ffmpeg.concat(*group_videos, v=1, a=0)
+        total = sum(group_totals)
 
     # For scenes that DON'T have their own overlay, we composite the global overlay
     # (padding is now applied per-stream above so xfade dimensions match)
