@@ -1530,9 +1530,10 @@ def build_video(
                     .filter("zoompan", z=z_expr, x=x_expr, y=y_expr,
                             d=frame_count, s=f"{REEL_WIDTH}x{REEL_HEIGHT}", fps=30)
                     .filter("setsar", "1")
-                    .filter("fps", 30)
                     .filter("trim", duration=scene.duration)
                     .filter("setpts", "PTS-STARTPTS")
+                    .filter("fps", 30)
+                    .filter("settb", "1/30")
                 )
             elif scene.motion == MotionProfile.SLOW_ZOOM:
                 z_expr, x_expr, y_expr, frame_count = _slow_zoom_expr(index, scene)
@@ -1542,9 +1543,10 @@ def build_video(
                     .filter("zoompan", z=z_expr, x=x_expr, y=y_expr,
                             d=frame_count, s=f"{REEL_WIDTH}x{REEL_HEIGHT}", fps=30)
                     .filter("setsar", "1")
-                    .filter("fps", 30)
                     .filter("trim", duration=scene.duration)
                     .filter("setpts", "PTS-STARTPTS")
+                    .filter("fps", 30)
+                    .filter("settb", "1/30")
                 )
             else:
                 # STATIC — just scale and hold
@@ -1553,9 +1555,10 @@ def build_video(
                     .input(str(frame_path), loop=1, t=scene.duration + 0.2)
                     .filter("scale", REEL_WIDTH, REEL_HEIGHT)
                     .filter("setsar", "1")
-                    .filter("fps", 30)
                     .filter("trim", duration=scene.duration)
                     .filter("setpts", "PTS-STARTPTS")
+                    .filter("fps", 30)
+                    .filter("settb", "1/30")
                 )
         else:
             # Photo scene — render at photo dimensions with Ken Burns,
@@ -1567,74 +1570,41 @@ def build_video(
                 .filter("zoompan", z=z_expr, x=x_expr, y=y_expr,
                         d=frame_count, s=f"{REEL_PHOTO_WIDTH}x{REEL_PHOTO_HEIGHT}", fps=30)
                 .filter("setsar", "1")
-                .filter("fps", 30)
                 .filter("trim", duration=scene.duration)
                 .filter("setpts", "PTS-STARTPTS")
                 .filter("pad", REEL_WIDTH, REEL_HEIGHT, REEL_MARGIN_X, REEL_PHOTO_TOP, color="0x12141C")
+                .filter("fps", 30)
+                .filter("settb", "1/30")
             )
 
         streams.append(stream)
         durations.append(scene.duration)
 
-    # Compose streams with transitions.
-    #
-    # We batch scenes into groups and use xfade within each group, then
-    # concat the groups.  This avoids FFmpeg's filter-graph depth issue
-    # that causes "current rate of 1/0 is invalid" when chaining 12+
-    # xfade filters in a single filter graph.
-    XFADE_BATCH = 6  # max scenes per xfade group
+    # Compose streams with xfade transitions (simple single chain).
+    video = streams[0]
+    elapsed = durations[0]
+    previous_transition = "fade"
 
-    def _xfade_group(group_streams, group_durations, group_scenes, start_index):
-        """Chain xfade transitions within a small group of streams."""
-        if len(group_streams) == 1:
-            return group_streams[0], group_durations[0]
+    for i in range(1, len(streams)):
+        offset = elapsed - transition_duration
+        tr = content_scenes[i].transition
+        if tr is None:
+            tr_rng = _rng_for_scene(i, content_scenes[i])
+            tr = tr_rng.choice(transition_candidates)
+            if tr == previous_transition:
+                tr = transition_candidates[(transition_candidates.index(tr) + 1) % len(transition_candidates)]
 
-        video = group_streams[0]
-        elapsed = group_durations[0]
-        previous_transition = "fade"
-        for i in range(1, len(group_streams)):
-            offset = elapsed - transition_duration
-            tr = group_scenes[i].transition
-            if tr is None:
-                tr_rng = _rng_for_scene(start_index + i, group_scenes[i])
-                tr = tr_rng.choice(transition_candidates)
-                if tr == previous_transition:
-                    tr = transition_candidates[(transition_candidates.index(tr) + 1) % len(transition_candidates)]
+        video = ffmpeg.filter(
+            [video, streams[i]],
+            "xfade",
+            transition=tr,
+            duration=transition_duration,
+            offset=offset,
+        )
+        previous_transition = tr
+        elapsed += durations[i] - transition_duration
 
-            video = ffmpeg.filter(
-                [video, group_streams[i]],
-                "xfade",
-                transition=tr,
-                duration=transition_duration,
-                offset=offset,
-            )
-            previous_transition = tr
-            elapsed += group_durations[i] - transition_duration
-        group_total = sum(group_durations) - transition_duration * (len(group_streams) - 1)
-        return video, group_total
-
-    if len(streams) <= XFADE_BATCH:
-        # Small scene count — single xfade chain is fine
-        video, total = _xfade_group(streams, durations, content_scenes, 0)
-    else:
-        # Split into batches, xfade within each batch, then concat batches
-        group_videos = []
-        group_totals = []
-        idx = 0
-        while idx < len(streams):
-            end = min(idx + XFADE_BATCH, len(streams))
-            g_video, g_total = _xfade_group(
-                streams[idx:end], durations[idx:end],
-                content_scenes[idx:end], idx,
-            )
-            # Normalize format for concat
-            g_video = g_video.filter("format", "yuv420p")
-            group_videos.append(g_video)
-            group_totals.append(g_total)
-            idx = end
-
-        video = ffmpeg.concat(*group_videos, v=1, a=0)
-        total = sum(group_totals)
+    total = sum(durations) - transition_duration * (len(streams) - 1)
 
     # For scenes that DON'T have their own overlay, we composite the global overlay
     # (padding is now applied per-stream above so xfade dimensions match)
@@ -1646,10 +1616,10 @@ def build_video(
                 ffmpeg
                 .input(str(overlay_frame), loop=1, t=max(0.1, total))
                 .filter("scale", REEL_WIDTH, REEL_HEIGHT)
-                .filter("fps", 30)
                 .filter("format", "rgba")
                 .filter("trim", duration=total)
                 .filter("setpts", "PTS-STARTPTS")
+                .filter("fps", 30)
             )
             video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=1, eof_action="pass")
 
@@ -1660,9 +1630,10 @@ def build_video(
             .input(str(outro_scene.frame_path), loop=1, t=outro_scene.duration)
             .filter("scale", REEL_WIDTH, REEL_HEIGHT)
             .filter("setsar", "1")
-            .filter("fps", 30)
             .filter("trim", duration=outro_scene.duration)
             .filter("setpts", "PTS-STARTPTS")
+            .filter("fps", 30)
+            .filter("settb", "1/30")
         )
         video = ffmpeg.concat(
             video.filter("format", "yuv420p"),
