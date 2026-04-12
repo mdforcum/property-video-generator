@@ -1846,17 +1846,15 @@ def process_video_task(
                 frame.save(frame_path, quality=95)
             scene.frame_path = frame_path
 
-            # --- FREE rendered frame + scene data images to reclaim memory ---
+            # --- FREE rendered frame to reclaim memory ---
             if frame is not scene.rendered_frame:
                 frame.close()
             if scene.rendered_frame is not None:
                 scene.rendered_frame.close()
                 scene.rendered_frame = None
-            # Close any PIL images stored in scene.data
-            for key, val in list(scene.data.items()):
-                if isinstance(val, Image.Image):
-                    val.close()
-                    scene.data[key] = None
+            # NOTE: Do NOT close scene.data images here — multiple scenes
+            # share the same PIL Image references (e.g. bg_image = photos[0]).
+            # Closing one scene's data would break later scenes that use it.
         gc.collect()
 
         # --- Render global overlay (for photo scenes) ---
