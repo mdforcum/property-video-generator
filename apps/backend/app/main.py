@@ -1131,6 +1131,94 @@ def _draw_template_frame(base: Image.Image, template: str) -> None:
     )
 
 
+def _draw_hero_text_overlay(
+    width: int,
+    height: int,
+    address: str,
+    price: str,
+    template: str = "new_listing",
+) -> Image.Image:
+    """Draw a minimal transparent overlay with address + price for the hero photo.
+
+    This overlay is composited with fade-in/fade-out timing by FFmpeg,
+    creating an animated text pop-in effect on the first scene.
+    """
+    base = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(base)
+
+    template_key = _normalize_template(template)
+    style = FRAME_TEMPLATES[template_key]
+    primary = style["primary"][:3]
+
+    # Fonts
+    price_font = _load_font(72, bold=True)
+    addr_font = _load_font(38, bold=True)
+    addr_small_font = _load_font(30, bold=False)
+
+    # Bottom gradient for text readability (fast 1-pixel-wide column, then resize)
+    grad_h = 500
+    grad_col = Image.new("L", (1, grad_h))
+    for y in range(grad_h):
+        alpha = int(200 * (y / grad_h) ** 1.5)
+        grad_col.putpixel((0, y), min(alpha, 200))
+    grad_col = grad_col.resize((width, grad_h), Image.Resampling.BILINEAR)
+    gradient = Image.new("RGBA", (width, grad_h), (0, 0, 0, 255))
+    gradient.putalpha(grad_col)
+    base.alpha_composite(gradient, (0, height - grad_h))
+
+    # Price — large, bottom area
+    price_y = height - 180
+    price_bbox = draw.textbbox((0, 0), price, font=price_font)
+    price_w = price_bbox[2] - price_bbox[0]
+    draw.text(
+        ((width - price_w) // 2, price_y),
+        price,
+        fill=(255, 255, 255, 255),
+        font=price_font,
+        stroke_width=2,
+        stroke_fill=(0, 0, 0, 160),
+    )
+
+    # Accent line above price
+    line_w = 60
+    line_y = price_y - 24
+    draw.rounded_rectangle(
+        ((width - line_w) // 2, line_y, (width + line_w) // 2, line_y + 3),
+        radius=2,
+        fill=(*primary, 220),
+    )
+
+    # Address — above the accent line
+    addr_parts = [p.strip() for p in address.split(",")]
+    street = addr_parts[0] if addr_parts else address
+    city_state = ", ".join(addr_parts[1:]) if len(addr_parts) > 1 else ""
+
+    street_bbox = draw.textbbox((0, 0), street, font=addr_font)
+    street_w = street_bbox[2] - street_bbox[0]
+    draw.text(
+        ((width - street_w) // 2, line_y - 75),
+        street,
+        fill=(255, 255, 255, 255),
+        font=addr_font,
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 120),
+    )
+
+    if city_state:
+        cs_bbox = draw.textbbox((0, 0), city_state, font=addr_small_font)
+        cs_w = cs_bbox[2] - cs_bbox[0]
+        draw.text(
+            ((width - cs_w) // 2, line_y - 40),
+            city_state,
+            fill=(220, 220, 220, 240),
+            font=addr_small_font,
+            stroke_width=1,
+            stroke_fill=(0, 0, 0, 100),
+        )
+
+    return base
+
+
 def draw_overlay_layer(
     width: int,
     height: int,
@@ -1307,7 +1395,7 @@ def draw_outro_frame(
     top_tint = Image.new("RGBA", (width, height), (24, 32, 48, 180))
     top_tint.putalpha(gradient)
     canvas.alpha_composite(top_tint)
-    _draw_template_frame(canvas, template)
+    # No template frame/chip on the outro — clean branded card only
 
     draw = ImageDraw.Draw(canvas)
     title_font = _load_font(58, bold=True)
@@ -1328,11 +1416,9 @@ def draw_outro_frame(
     logo_bottom = 0
     if broker_logo is not None:
         logo = broker_logo.copy()
-        logo.thumbnail((360, 130), Image.Resampling.LANCZOS)
-        logo_x = REEL_WIDTH - REEL_MARGIN_X - logo.width
-        logo_y = 144
-        chip = (logo_x - 12, logo_y - 8, logo_x + logo.width + 12, logo_y + logo.height + 8)
-        draw.rounded_rectangle(chip, radius=14, fill=(255, 255, 255, 210))
+        logo.thumbnail((320, 110), Image.Resampling.LANCZOS)
+        logo_x = (width - logo.width) // 2
+        logo_y = 120
         canvas.alpha_composite(logo, (logo_x, logo_y))
         logo_bottom = logo_y + logo.height
 
@@ -1561,18 +1647,16 @@ def build_video(
                     .filter("settb", "1/30")
                 )
         else:
-            # Photo scene — render at photo dimensions with Ken Burns,
-            # then pad to full frame size so xfade dimensions match card scenes
+            # Photo scene — full-bleed at 1080x1920 with Ken Burns
             z_expr, x_expr, y_expr, frame_count = _ken_burns_expr(index, scene)
             stream = (
                 ffmpeg
                 .input(str(frame_path), loop=1, t=scene.duration + 0.2)
                 .filter("zoompan", z=z_expr, x=x_expr, y=y_expr,
-                        d=frame_count, s=f"{REEL_PHOTO_WIDTH}x{REEL_PHOTO_HEIGHT}", fps=30)
+                        d=frame_count, s=f"{REEL_WIDTH}x{REEL_HEIGHT}", fps=30)
                 .filter("setsar", "1")
                 .filter("trim", duration=scene.duration)
                 .filter("setpts", "PTS-STARTPTS")
-                .filter("pad", REEL_WIDTH, REEL_HEIGHT, REEL_MARGIN_X, REEL_PHOTO_TOP, color="0x12141C")
                 .filter("fps", 30)
                 .filter("settb", "1/30")
             )
@@ -1606,22 +1690,25 @@ def build_video(
 
     total = sum(durations) - transition_duration * (len(streams) - 1)
 
-    # For scenes that DON'T have their own overlay, we composite the global overlay
-    # (padding is now applied per-stream above so xfade dimensions match)
-    has_photo_scenes = any(not s.has_own_overlay for s in content_scenes)
+    # Global overlay removed — photos are now full-bleed with no frame/branding.
+    # Hero text pop-in is handled via a separate overlay below.
 
-    if has_photo_scenes:
-        if overlay_frame is not None:
-            overlay_stream = (
-                ffmpeg
-                .input(str(overlay_frame), loop=1, t=max(0.1, total))
-                .filter("scale", REEL_WIDTH, REEL_HEIGHT)
-                .filter("format", "rgba")
-                .filter("trim", duration=total)
-                .filter("setpts", "PTS-STARTPTS")
-                .filter("fps", 30)
-            )
-            video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=1, eof_action="pass")
+    # Hero text pop-in overlay (address + price fade in on first scene)
+    if overlay_frame is not None:
+        hero_dur = content_scenes[0].duration if content_scenes else 3.0
+        overlay_stream = (
+            ffmpeg
+            .input(str(overlay_frame), loop=1, t=hero_dur)
+            .filter("scale", REEL_WIDTH, REEL_HEIGHT)
+            .filter("format", "rgba")
+            .filter("trim", duration=hero_dur)
+            .filter("setpts", "PTS-STARTPTS")
+            .filter("fps", 30)
+            # Fade in at 0.3s, hold, fade out before transition
+            .filter("fade", type="in", start_time=0.3, duration=0.5, alpha=1)
+            .filter("fade", type="out", start_time=hero_dur - 0.8, duration=0.5, alpha=1)
+        )
+        video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=0, eof_action="pass")
 
     # Concat outro if present
     if outro_scene and outro_scene.frame_path:
@@ -1863,18 +1950,16 @@ def process_video_task(
             # Closing one scene's data would break later scenes that use it.
         gc.collect()
 
-        # --- Render global overlay (for photo scenes) ---
+        # --- Render hero text overlay (minimal address + price pop-in) ---
         _set_step("render_overlay")
         _set_job_progress(job_id, 72)
         overlay_path = None
         has_photo_scenes = any(not s.has_own_overlay for s in scenes)
         if has_photo_scenes:
             overlay_path = temp_dir / "overlay.png"
-            overlay_image = draw_overlay_layer(
-                1080, 1920, address, price,
+            overlay_image = _draw_hero_text_overlay(
+                REEL_WIDTH, REEL_HEIGHT, address, price,
                 template=template,
-                branding=branding,
-                branding_assets=branding_assets,
             )
             overlay_image.save(overlay_path)
             overlay_image.close()

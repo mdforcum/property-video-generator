@@ -1,10 +1,10 @@
-"""Scene frame renderers.
+"""Scene frame renderers — v2 (glass panel style).
 
 Each renderer takes a Scene and produces a full-resolution PIL Image
-(1080x1920 for 9:16, or 1080x1080 for square).  Photo-type scenes
-render just the cropped photo (the overlay is composited separately
-by the pipeline).  Data-card scenes render complete frames with all
-text and graphics baked in (has_own_overlay=True).
+(1080x1920 for 9:16).  Photo-type scenes render just the cropped photo
+(the hero overlay is composited separately by the pipeline with FFmpeg
+fade-in/out).  Data-card scenes render complete frames with blurred
+photo backgrounds and frosted-glass content panels.
 """
 
 from __future__ import annotations
@@ -12,27 +12,28 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .models import Scene, SceneType
 
 logger = logging.getLogger(__name__)
 
-# Canvas defaults — overridden by format config when we add square support
 CANVAS_W = 1080
 CANVAS_H = 1920
 
 
 # ---------------------------------------------------------------------------
-# Font helper (mirrors main.py _load_font but self-contained)
+# Font helper
 # ---------------------------------------------------------------------------
 
 _FONT_CACHE: Dict[Tuple[int, bool], ImageFont.ImageFont] = {}
 
-_FONT_PATHS = [
+_FONT_PATHS_BOLD = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
+_FONT_PATHS_REGULAR = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 
@@ -41,29 +42,22 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     key = (size, bold)
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
-
-    # Try system fonts
-    for path in _FONT_PATHS:
-        if bold and "Bold" not in path:
-            continue
-        if not bold and "Bold" in path:
-            continue
+    paths = _FONT_PATHS_BOLD if bold else _FONT_PATHS_REGULAR
+    for path in paths:
         try:
             font = ImageFont.truetype(path, size)
             _FONT_CACHE[key] = font
             return font
         except (OSError, IOError):
             continue
-
-    # Fallback — try any available font
-    for path in _FONT_PATHS:
+    # Fallback
+    for path in _FONT_PATHS_BOLD + _FONT_PATHS_REGULAR:
         try:
             font = ImageFont.truetype(path, size)
             _FONT_CACHE[key] = font
             return font
         except (OSError, IOError):
             continue
-
     font = ImageFont.load_default()
     _FONT_CACHE[key] = font
     return font
@@ -97,6 +91,66 @@ def _wrap_text(
 
 
 # ---------------------------------------------------------------------------
+# Glass panel helper
+# ---------------------------------------------------------------------------
+
+def _make_glass_bg(
+    bg_image: Optional[Image.Image],
+    w: int = CANVAS_W,
+    h: int = CANVAS_H,
+    blur: int = 35,
+    darken: int = 140,
+) -> Image.Image:
+    """Create a blurred, darkened background from a listing photo."""
+    if bg_image is not None:
+        bg = bg_image.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=blur))
+        dark = Image.new("RGBA", (w, h), (0, 0, 0, darken))
+        bg.alpha_composite(dark)
+        return bg
+    return Image.new("RGBA", (w, h), (18, 20, 28, 255))
+
+
+def _draw_glass_panel(
+    draw: ImageDraw.ImageDraw,
+    canvas: Image.Image,
+    x0: int, y0: int, x1: int, y1: int,
+    radius: int = 28,
+    fill_alpha: int = 45,
+    border_alpha: int = 50,
+) -> None:
+    """Draw a frosted glass panel with subtle border."""
+    # Semi-transparent panel fill
+    panel = Image.new("RGBA", (x1 - x0, y1 - y0), (255, 255, 255, fill_alpha))
+    panel_draw = ImageDraw.Draw(panel)
+    # We draw on the canvas directly for the rounded rect
+    draw.rounded_rectangle(
+        (x0, y0, x1, y1),
+        radius=radius,
+        fill=(255, 255, 255, fill_alpha),
+        outline=(255, 255, 255, border_alpha),
+        width=1,
+    )
+
+
+def _center_text(
+    draw: ImageDraw.ImageDraw,
+    y: int,
+    text: str,
+    font: ImageFont.ImageFont,
+    fill=(255, 255, 255, 255),
+    w: int = CANVAS_W,
+    **kwargs,
+) -> int:
+    """Draw centered text, return y + line height."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    draw.text(((w - tw) // 2, y), text, fill=fill, font=font, **kwargs)
+    return y + th + 8
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
 
@@ -104,7 +158,6 @@ _RENDERER_TABLE: Dict[SceneType, Callable[[Scene], Image.Image]] = {}
 
 
 def _register(scene_type: SceneType):
-    """Decorator to register a renderer for a scene type."""
     def decorator(fn: Callable[[Scene], Image.Image]):
         _RENDERER_TABLE[scene_type] = fn
         return fn
@@ -112,10 +165,6 @@ def _register(scene_type: SceneType):
 
 
 def render_scene_frame(scene: Scene) -> Image.Image:
-    """Render a scene's frame using the appropriate type-specific renderer.
-
-    After calling this, scene.rendered_frame is set.
-    """
     renderer = _RENDERER_TABLE.get(scene.scene_type)
     if renderer is None:
         raise ValueError(f"No renderer registered for scene type: {scene.scene_type}")
@@ -125,125 +174,72 @@ def render_scene_frame(scene: Scene) -> Image.Image:
 
 
 # ============================================================================
-# PHOTO RENDERERS
+# PHOTO RENDERERS  (return cropped photo — no overlay baked in)
 # ============================================================================
 
 @_register(SceneType.HERO_PHOTO)
 def _render_hero_photo(scene: Scene) -> Image.Image:
-    """Render the hero photo.
-
-    For photo scenes, we just return the cropped photo image.
-    The overlay (label chip, address, price) is composited separately
-    by the pipeline, so this renderer only handles the photo itself.
-
-    data keys:
-        photo_image: PIL Image (already cropped to 9:16)
-    """
     photo: Image.Image = scene.data["photo_image"]
     return photo.convert("RGB")
 
 
 @_register(SceneType.INTERIOR_PHOTO)
 def _render_interior_photo(scene: Scene) -> Image.Image:
-    """Render a standard interior/listing photo.
-
-    Same as hero — returns cropped photo; overlay applied by pipeline.
-
-    data keys:
-        photo_image: PIL Image (already cropped to 9:16)
-    """
     photo: Image.Image = scene.data["photo_image"]
     return photo.convert("RGB")
 
 
 # ============================================================================
-# DATA CARD RENDERERS
+# DATA CARD RENDERERS — glass panel style
 # ============================================================================
 
 @_register(SceneType.STATS_CARD)
 def _render_stats_card(scene: Scene) -> Image.Image:
-    """Render a property statistics infographic card.
-
-    Shows beds, baths, sqft, lot size, year built in a clean grid layout
-    over a dark background with the listing photo blurred behind.
-
-    data keys:
-        beds (str):       e.g. "4"
-        baths (str):      e.g. "2.5"
-        sqft (str):       e.g. "2,450"
-        lot_size (str):   e.g. "0.25 acres"  (optional)
-        year_built (str): e.g. "2018"  (optional)
-        address (str):    Full address
-        price (str):      e.g. "$349,900"
-        template (str):   Color template key
-        bg_image (Image): Optional blurred background photo
-    """
+    """Property stats with frosted glass panel over blurred photo."""
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (18, 20, 28, 255))
-
-    # Optional blurred background
-    bg = scene.data.get("bg_image")
-    if bg is not None:
-        bg_copy = bg.copy().convert("RGBA")
-        bg_copy = bg_copy.resize((w, h), Image.Resampling.LANCZOS)
-        from PIL import ImageFilter
-        bg_copy = bg_copy.filter(ImageFilter.GaussianBlur(radius=25))
-        # Darken
-        dark = Image.new("RGBA", (w, h), (0, 0, 0, 160))
-        bg_copy.alpha_composite(dark)
-        canvas = bg_copy
-
+    canvas = _make_glass_bg(scene.data.get("bg_image"), w, h)
     draw = ImageDraw.Draw(canvas)
-    template = scene.data.get("template", "new_listing")
 
-    # Template colors
     from .constants import FRAME_TEMPLATES
+    template = scene.data.get("template", "new_listing")
     style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
     primary = style["primary"][:3]
 
-    # Title bar
-    title_font = _load_font(52, bold=True)
-    label_font = _load_font(36, bold=True)
+    # Fonts
+    header_font = _load_font(44, bold=True)
     value_font = _load_font(64, bold=True)
-    unit_font = _load_font(30, bold=False)
+    unit_font = _load_font(26, bold=False)
+    price_font = _load_font(64, bold=True)
+    addr_font = _load_font(34, bold=True)
 
-    # Draw label chip at top
-    label = style.get("label", "NEW LISTING")
-    chip_y = 180
-    chip_bbox = draw.textbbox((0, 0), label, font=label_font)
-    chip_w = (chip_bbox[2] - chip_bbox[0]) + 48
-    chip_h = (chip_bbox[3] - chip_bbox[1]) + 24
-    chip_x = (w - chip_w) // 2
+    # Glass panel
+    panel_x = 56
+    panel_y = 320
+    panel_w = w - panel_x * 2
+    panel_bottom = h - 280
+    _draw_glass_panel(draw, canvas, panel_x, panel_y, panel_x + panel_w, panel_bottom)
+
+    # Header inside panel
+    header_text = "Property Details"
+    y = panel_y + 50
+    y = _center_text(draw, y, header_text, header_font, fill=(255, 255, 255, 255))
+
+    # Accent line
+    line_w = 50
     draw.rounded_rectangle(
-        (chip_x, chip_y, chip_x + chip_w, chip_y + chip_h),
-        radius=18,
-        fill=(*primary, 230),
+        ((w - line_w) // 2, y + 8, (w + line_w) // 2, y + 11),
+        radius=2, fill=(*primary, 200),
     )
-    draw.text(
-        (chip_x + 24, chip_y + 12),
-        label,
-        fill=(255, 255, 255, 255),
-        font=label_font,
-    )
+    y += 40
 
-    # Address below chip
+    # Address
     address = scene.data.get("address", "")
-    addr_y = chip_y + chip_h + 40
-    addr_lines = _wrap_text(draw, address, title_font, w - 140, max_lines=2)
+    addr_lines = _wrap_text(draw, address, addr_font, panel_w - 80, max_lines=2)
     for line in addr_lines:
-        bbox = draw.textbbox((0, 0), line, font=title_font)
-        line_w = bbox[2] - bbox[0]
-        draw.text(
-            ((w - line_w) // 2, addr_y),
-            line,
-            fill=(255, 255, 255, 255),
-            font=title_font,
-            stroke_width=2,
-            stroke_fill=(0, 0, 0, 200),
-        )
-        addr_y += 64
+        y = _center_text(draw, y, line, addr_font, fill=(220, 220, 220, 255))
+    y += 30
 
-    # Stats grid — centered 2-column layout
+    # Stats grid
     stats = []
     if scene.data.get("beds"):
         stats.append(("BEDS", scene.data["beds"]))
@@ -259,61 +255,58 @@ def _render_stats_card(scene: Scene) -> Image.Image:
         stats.append(("GARAGE", scene.data["garage"]))
 
     if stats:
-        grid_top = addr_y + 60
         cols = 2
-        cell_w = (w - 160) // cols
-        cell_h = 200
-        grid_left = 80
+        cell_w = (panel_w - 40) // cols
+        cell_h = 180
+        grid_left = panel_x + 20
 
         for idx, (unit_label, value) in enumerate(stats):
             col = idx % cols
             row = idx // cols
             cx = grid_left + col * cell_w + cell_w // 2
-            cy = grid_top + row * cell_h
+            cy = y + row * cell_h
 
-            # Card background
-            card_pad = 20
+            # Stat cell background
+            cell_pad = 12
             draw.rounded_rectangle(
-                (cx - cell_w // 2 + card_pad, cy, cx + cell_w // 2 - card_pad, cy + cell_h - 20),
-                radius=20,
-                fill=(0, 0, 0, 140),
+                (cx - cell_w // 2 + cell_pad, cy + 8,
+                 cx + cell_w // 2 - cell_pad, cy + cell_h - 12),
+                radius=16,
+                fill=(0, 0, 0, 70),
             )
 
             # Value
             val_bbox = draw.textbbox((0, 0), str(value), font=value_font)
             val_w = val_bbox[2] - val_bbox[0]
             draw.text(
-                (cx - val_w // 2, cy + 30),
+                (cx - val_w // 2, cy + 28),
                 str(value),
                 fill=(255, 255, 255, 255),
                 font=value_font,
-                stroke_width=2,
-                stroke_fill=(0, 0, 0, 180),
             )
 
-            # Label
+            # Unit label
             lbl_bbox = draw.textbbox((0, 0), unit_label, font=unit_font)
             lbl_w = lbl_bbox[2] - lbl_bbox[0]
             draw.text(
-                (cx - lbl_w // 2, cy + 110),
+                (cx - lbl_w // 2, cy + 105),
                 unit_label,
-                fill=(*primary, 255),
+                fill=(*primary, 230),
                 font=unit_font,
             )
 
-    # Price at bottom
+    # Price at bottom of panel
     price = scene.data.get("price", "")
     if price:
-        price_font = _load_font(72, bold=True)
         price_bbox = draw.textbbox((0, 0), price, font=price_font)
         price_w = price_bbox[2] - price_bbox[0]
         draw.text(
-            ((w - price_w) // 2, h - 300),
+            ((w - price_w) // 2, panel_bottom - 100),
             price,
             fill=(255, 255, 255, 255),
             font=price_font,
-            stroke_width=3,
-            stroke_fill=(0, 0, 0, 255),
+            stroke_width=1,
+            stroke_fill=(0, 0, 0, 80),
         )
 
     return canvas.convert("RGB")
@@ -321,27 +314,9 @@ def _render_stats_card(scene: Scene) -> Image.Image:
 
 @_register(SceneType.DESCRIPTION_CARD)
 def _render_description_card(scene: Scene) -> Image.Image:
-    """Render an AI-generated property description card.
-
-    data keys:
-        description (str): The property description text
-        address (str): Property address
-        price (str): Price string
-        template (str): Color template key
-        bg_image (Image): Optional blurred background
-    """
+    """Property description with frosted glass panel."""
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (18, 20, 28, 255))
-
-    bg = scene.data.get("bg_image")
-    if bg is not None:
-        bg_copy = bg.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        from PIL import ImageFilter
-        bg_copy = bg_copy.filter(ImageFilter.GaussianBlur(radius=30))
-        dark = Image.new("RGBA", (w, h), (0, 0, 0, 180))
-        bg_copy.alpha_composite(dark)
-        canvas = bg_copy
-
+    canvas = _make_glass_bg(scene.data.get("bg_image"), w, h, blur=40, darken=160)
     draw = ImageDraw.Draw(canvas)
 
     from .constants import FRAME_TEMPLATES
@@ -349,93 +324,53 @@ def _render_description_card(scene: Scene) -> Image.Image:
     style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
     primary = style["primary"][:3]
 
-    # "About This Home" header
-    header_font = _load_font(48, bold=True)
-    body_font = _load_font(34, bold=False)
+    header_font = _load_font(42, bold=True)
+    body_font = _load_font(32, bold=False)
 
-    header_y = 280
-    header_text = "About This Home"
-    hdr_bbox = draw.textbbox((0, 0), header_text, font=header_font)
-    hdr_w = hdr_bbox[2] - hdr_bbox[0]
-    draw.text(
-        ((w - hdr_w) // 2, header_y),
-        header_text,
-        fill=(*primary, 255),
-        font=header_font,
-    )
+    # Glass panel
+    panel_x = 56
+    panel_y = 340
+    panel_bottom = h - 300
+    _draw_glass_panel(draw, canvas, panel_x, panel_y, w - panel_x, panel_bottom)
+
+    # Header
+    y = panel_y + 50
+    y = _center_text(draw, y, "About This Home", header_font)
 
     # Accent line
-    line_y = header_y + 70
-    line_w = 120
+    line_w = 50
     draw.rounded_rectangle(
-        ((w - line_w) // 2, line_y, (w + line_w) // 2, line_y + 4),
-        radius=2,
-        fill=(*primary, 200),
+        ((w - line_w) // 2, y + 4, (w + line_w) // 2, y + 7),
+        radius=2, fill=(*primary, 200),
     )
+    y += 36
 
-    # Description text block
+    # Description text
     description = scene.data.get("description", "")
-    text_top = line_y + 40
-    margin = 80
+    margin = panel_x + 36
     max_text_w = w - margin * 2
+    lines = _wrap_text(draw, description, body_font, max_text_w, max_lines=18)
+    line_spacing = 44
 
-    # Word-wrap the description
-    lines = _wrap_text(draw, description, body_font, max_text_w, max_lines=16)
-    text_y = text_top
-    line_spacing = 48
     for line in lines:
-        if text_y + 40 > h - 350:
+        if y + 40 > panel_bottom - 40:
             break
         draw.text(
-            (margin, text_y),
+            (margin, y),
             line,
-            fill=(240, 240, 240, 255),
+            fill=(235, 235, 235, 255),
             font=body_font,
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 120),
         )
-        text_y += line_spacing
-
-    # Price at bottom
-    price = scene.data.get("price", "")
-    if price:
-        price_font = _load_font(72, bold=True)
-        price_bbox = draw.textbbox((0, 0), price, font=price_font)
-        price_w = price_bbox[2] - price_bbox[0]
-        draw.text(
-            ((w - price_w) // 2, h - 280),
-            price,
-            fill=(255, 255, 255, 255),
-            font=price_font,
-            stroke_width=3,
-            stroke_fill=(0, 0, 0, 255),
-        )
+        y += line_spacing
 
     return canvas.convert("RGB")
 
 
 @_register(SceneType.FEATURES_CARD)
 def _render_features_card(scene: Scene) -> Image.Image:
-    """Render a key features / amenities card.
-
-    data keys:
-        features (list[str]): List of feature strings
-        address (str): Property address
-        template (str): Color template key
-        bg_image (Image): Optional blurred background
-    """
+    """Key features with frosted glass panel."""
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (18, 20, 28, 255))
-
-    bg = scene.data.get("bg_image")
-    if bg is not None:
-        bg_copy = bg.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        from PIL import ImageFilter
-        bg_copy = bg_copy.filter(ImageFilter.GaussianBlur(radius=28))
-        dark = Image.new("RGBA", (w, h), (0, 0, 0, 170))
-        bg_copy.alpha_composite(dark)
-        canvas = bg_copy
-
+    canvas = _make_glass_bg(scene.data.get("bg_image"), w, h, blur=32, darken=150)
     draw = ImageDraw.Draw(canvas)
 
     from .constants import FRAME_TEMPLATES
@@ -443,69 +378,60 @@ def _render_features_card(scene: Scene) -> Image.Image:
     style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
     primary = style["primary"][:3]
 
-    header_font = _load_font(48, bold=True)
-    feat_font = _load_font(36, bold=False)
-    bullet_font = _load_font(36, bold=True)
+    header_font = _load_font(42, bold=True)
+    feat_font = _load_font(32, bold=False)
+
+    # Glass panel
+    panel_x = 56
+    panel_y = 340
+    panel_bottom = h - 300
+    _draw_glass_panel(draw, canvas, panel_x, panel_y, w - panel_x, panel_bottom)
 
     # Header
-    header_y = 280
-    header_text = "Key Features"
-    hdr_bbox = draw.textbbox((0, 0), header_text, font=header_font)
-    hdr_w = hdr_bbox[2] - hdr_bbox[0]
-    draw.text(((w - hdr_w) // 2, header_y), header_text, fill=(*primary, 255), font=header_font)
+    y = panel_y + 50
+    y = _center_text(draw, y, "Key Features", header_font)
 
-    # Features list
+    # Accent line
+    line_w = 50
+    draw.rounded_rectangle(
+        ((w - line_w) // 2, y + 4, (w + line_w) // 2, y + 7),
+        radius=2, fill=(*primary, 200),
+    )
+    y += 40
+
+    # Feature list
     features = scene.data.get("features", [])
-    feat_y = header_y + 100
-    margin = 100
+    margin = panel_x + 40
 
     for feat in features[:10]:
-        if feat_y > h - 350:
+        if y > panel_bottom - 60:
             break
         # Bullet dot
+        dot_y = y + 12
         draw.ellipse(
-            (margin, feat_y + 12, margin + 16, feat_y + 28),
-            fill=(*primary, 230),
+            (margin, dot_y, margin + 10, dot_y + 10),
+            fill=(*primary, 220),
         )
         # Feature text
-        feat_lines = _wrap_text(draw, feat, feat_font, w - margin - 50 - margin, max_lines=2)
+        feat_lines = _wrap_text(draw, feat, feat_font, w - margin - 50 - panel_x, max_lines=2)
         for fl in feat_lines:
             draw.text(
-                (margin + 36, feat_y),
+                (margin + 26, y),
                 fl,
-                fill=(240, 240, 240, 255),
+                fill=(235, 235, 235, 255),
                 font=feat_font,
-                stroke_width=1,
-                stroke_fill=(0, 0, 0, 100),
             )
-            feat_y += 50
-        feat_y += 16
+            y += 44
+        y += 12
 
     return canvas.convert("RGB")
 
 
 @_register(SceneType.SCHOOLS_CARD)
 def _render_schools_card(scene: Scene) -> Image.Image:
-    """Render a nearby schools infographic.
-
-    data keys:
-        schools (list[dict]): Each dict has name, rating, distance, grades
-        address (str): Property address
-        template (str): Color template key
-        bg_image (Image): Optional blurred background
-    """
+    """Nearby schools with frosted glass cards."""
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (18, 20, 28, 255))
-
-    bg = scene.data.get("bg_image")
-    if bg is not None:
-        bg_copy = bg.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        from PIL import ImageFilter
-        bg_copy = bg_copy.filter(ImageFilter.GaussianBlur(radius=28))
-        dark = Image.new("RGBA", (w, h), (0, 0, 0, 170))
-        bg_copy.alpha_composite(dark)
-        canvas = bg_copy
-
+    canvas = _make_glass_bg(scene.data.get("bg_image"), w, h, blur=32, darken=150)
     draw = ImageDraw.Draw(canvas)
 
     from .constants import FRAME_TEMPLATES
@@ -513,40 +439,39 @@ def _render_schools_card(scene: Scene) -> Image.Image:
     style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
     primary = style["primary"][:3]
 
-    header_font = _load_font(48, bold=True)
-    name_font = _load_font(34, bold=True)
-    detail_font = _load_font(28, bold=False)
-    rating_font = _load_font(42, bold=True)
+    header_font = _load_font(42, bold=True)
+    name_font = _load_font(30, bold=True)
+    detail_font = _load_font(24, bold=False)
+    rating_font = _load_font(36, bold=True)
 
-    # Header
-    header_y = 280
-    header_text = "Nearby Schools"
-    hdr_bbox = draw.textbbox((0, 0), header_text, font=header_font)
-    hdr_w = hdr_bbox[2] - hdr_bbox[0]
-    draw.text(((w - hdr_w) // 2, header_y), header_text, fill=(*primary, 255), font=header_font)
+    # Header area (no glass panel for header)
+    y = 360
+    y = _center_text(draw, y, "Nearby Schools", header_font)
 
-    # School cards
+    # Accent line
+    line_w = 50
+    draw.rounded_rectangle(
+        ((w - line_w) // 2, y + 4, (w + line_w) // 2, y + 7),
+        radius=2, fill=(*primary, 200),
+    )
+    y += 40
+
+    # Individual glass cards for each school
     schools = scene.data.get("schools", [])
-    card_y = header_y + 100
-    margin = 70
+    margin = 56
 
     for school in schools[:5]:
-        if card_y > h - 400:
+        if y > h - 350:
             break
 
-        card_h = 160
-        draw.rounded_rectangle(
-            (margin, card_y, w - margin, card_y + card_h),
-            radius=18,
-            fill=(0, 0, 0, 150),
-        )
+        card_h = 140
+        _draw_glass_panel(draw, canvas, margin, y, w - margin, y + card_h, radius=18)
 
         # Rating circle
         rating = str(school.get("rating", "?"))
-        circle_x = margin + 30
-        circle_y = card_y + 25
-        circle_r = 50
-        # Color based on rating
+        circle_x = margin + 24
+        circle_cy = y + card_h // 2
+        circle_r = 38
         try:
             r_val = float(rating)
             if r_val >= 8:
@@ -559,88 +484,64 @@ def _render_schools_card(scene: Scene) -> Image.Image:
             r_color = (150, 150, 150)
 
         draw.ellipse(
-            (circle_x, circle_y, circle_x + circle_r * 2, circle_y + circle_r * 2),
-            fill=(*r_color, 230),
+            (circle_x, circle_cy - circle_r, circle_x + circle_r * 2, circle_cy + circle_r),
+            fill=(*r_color, 220),
         )
         r_bbox = draw.textbbox((0, 0), rating, font=rating_font)
         r_w = r_bbox[2] - r_bbox[0]
         r_h = r_bbox[3] - r_bbox[1]
         draw.text(
-            (circle_x + circle_r - r_w // 2, circle_y + circle_r - r_h // 2 - 4),
+            (circle_x + circle_r - r_w // 2, circle_cy - r_h // 2 - circle_r // 2),
             rating,
             fill=(255, 255, 255, 255),
             font=rating_font,
         )
 
         # School name and details
-        text_x = circle_x + circle_r * 2 + 24
+        text_x = circle_x + circle_r * 2 + 20
         name = school.get("name", "School")
-        name_lines = _wrap_text(draw, name, name_font, w - margin - text_x - 30, max_lines=1)
+        name_lines = _wrap_text(draw, name, name_font, w - margin - text_x - 20, max_lines=1)
         if name_lines:
-            draw.text(
-                (text_x, card_y + 30),
-                name_lines[0],
-                fill=(255, 255, 255, 255),
-                font=name_font,
-            )
+            draw.text((text_x, y + 24), name_lines[0], fill=(255, 255, 255, 255), font=name_font)
 
         details = []
         if school.get("grades"):
             details.append(f"Grades: {school['grades']}")
         if school.get("distance"):
             details.append(f"{school['distance']} mi")
-        detail_text = "  |  ".join(details)
+        detail_text = "  ·  ".join(details)
         if detail_text:
-            draw.text(
-                (text_x, card_y + 75),
-                detail_text,
-                fill=(200, 200, 200, 255),
-                font=detail_font,
-            )
+            draw.text((text_x, y + 62), detail_text, fill=(200, 200, 200, 255), font=detail_font)
 
         school_type = school.get("type", "")
         if school_type:
-            draw.text(
-                (text_x, card_y + 112),
-                school_type,
-                fill=(170, 170, 170, 255),
-                font=detail_font,
-            )
+            draw.text((text_x, y + 92), school_type, fill=(170, 170, 170, 255), font=detail_font)
 
-        card_y += card_h + 20
+        y += card_h + 16
 
     return canvas.convert("RGB")
 
 
 @_register(SceneType.MAP_CTA)
 def _render_map_cta(scene: Scene) -> Image.Image:
-    """Render a map image with call-to-action overlay.
-
-    data keys:
-        map_image (Image): Static map image (optional — will render placeholder if missing)
-        address (str): Property address
-        price (str): Price string
-        cta_text (str): Call-to-action text (default: "Schedule a Showing")
-        template (str): Color template key
-    """
+    """Map with call-to-action — glass panel style."""
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (30, 34, 42, 255))
+    canvas = Image.new("RGBA", (w, h), (24, 28, 36, 255))
 
     map_img = scene.data.get("map_image")
     if map_img is not None:
         map_copy = map_img.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        # Semi-transparent overlay to make text readable
-        dark = Image.new("RGBA", (w, h), (0, 0, 0, 100))
+        dark = Image.new("RGBA", (w, h), (0, 0, 0, 80))
         map_copy.alpha_composite(dark)
         canvas = map_copy
     else:
-        # Placeholder — dark gradient with grid pattern
+        # Subtle grid placeholder
         draw_bg = ImageDraw.Draw(canvas)
-        grid_color = (50, 55, 65, 255)
-        for x in range(0, w, 60):
+        grid_color = (40, 44, 52, 255)
+        for x in range(0, w, 80):
             draw_bg.line([(x, 0), (x, h)], fill=grid_color, width=1)
-        for y in range(0, h, 60):
-            draw_bg.line([(0, y), (w, y)], fill=grid_color, width=1)
+        for y_pos in range(0, h, 80):
+            draw_bg.line([(0, y_pos), (w, y_pos)], fill=grid_color, width=1)
 
     draw = ImageDraw.Draw(canvas)
 
@@ -649,76 +550,71 @@ def _render_map_cta(scene: Scene) -> Image.Image:
     style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
     primary = style["primary"][:3]
 
-    # Location pin icon (simple circle + triangle)
+    # Glass panel in center
+    panel_x = 80
+    panel_y = h // 2 - 200
+    panel_bottom = h // 2 + 260
+    _draw_glass_panel(draw, canvas, panel_x, panel_y, w - panel_x, panel_bottom, fill_alpha=55)
+
+    # Location pin
     pin_cx = w // 2
-    pin_cy = h // 2 - 200
-    pin_r = 40
+    pin_cy = panel_y + 70
+    pin_r = 28
     draw.ellipse(
         (pin_cx - pin_r, pin_cy - pin_r, pin_cx + pin_r, pin_cy + pin_r),
-        fill=(*primary, 240),
+        fill=(*primary, 230),
     )
     draw.polygon(
-        [(pin_cx - 25, pin_cy + 30), (pin_cx + 25, pin_cy + 30), (pin_cx, pin_cy + 75)],
-        fill=(*primary, 240),
+        [(pin_cx - 16, pin_cy + 22), (pin_cx + 16, pin_cy + 22), (pin_cx, pin_cy + 52)],
+        fill=(*primary, 230),
     )
-    # Inner dot
     draw.ellipse(
-        (pin_cx - 14, pin_cy - 14, pin_cx + 14, pin_cy + 14),
-        fill=(255, 255, 255, 230),
+        (pin_cx - 10, pin_cy - 10, pin_cx + 10, pin_cy + 10),
+        fill=(255, 255, 255, 220),
     )
 
     # Address
-    addr_font = _load_font(44, bold=True)
+    addr_font = _load_font(36, bold=True)
+    addr_small = _load_font(28, bold=False)
     address = scene.data.get("address", "")
-    addr_lines = _wrap_text(draw, address, addr_font, w - 120, max_lines=2)
-    addr_y = pin_cy + 120
+    addr_lines = _wrap_text(draw, address, addr_font, w - 160, max_lines=2)
+    addr_y = pin_cy + 70
     for line in addr_lines:
-        bbox = draw.textbbox((0, 0), line, font=addr_font)
-        lw = bbox[2] - bbox[0]
-        draw.text(
-            ((w - lw) // 2, addr_y),
-            line,
-            fill=(255, 255, 255, 255),
-            font=addr_font,
-            stroke_width=2,
-            stroke_fill=(0, 0, 0, 200),
-        )
-        addr_y += 56
+        addr_y = _center_text(draw, addr_y, line, addr_font)
 
     # CTA button
     cta_text = scene.data.get("cta_text", "Schedule a Showing")
-    cta_font = _load_font(40, bold=True)
+    cta_font = _load_font(34, bold=True)
     cta_bbox = draw.textbbox((0, 0), cta_text, font=cta_font)
-    cta_w = (cta_bbox[2] - cta_bbox[0]) + 80
-    cta_h = (cta_bbox[3] - cta_bbox[1]) + 40
+    cta_w = (cta_bbox[2] - cta_bbox[0]) + 64
+    cta_h = (cta_bbox[3] - cta_bbox[1]) + 32
     cta_x = (w - cta_w) // 2
-    cta_y = h - 450
-
+    cta_y = panel_bottom - cta_h - 40
     draw.rounded_rectangle(
         (cta_x, cta_y, cta_x + cta_w, cta_y + cta_h),
         radius=cta_h // 2,
-        fill=(*primary, 240),
+        fill=(*primary, 230),
     )
     draw.text(
-        (cta_x + 40, cta_y + 20),
+        (cta_x + 32, cta_y + 16),
         cta_text,
         fill=(255, 255, 255, 255),
         font=cta_font,
     )
 
-    # Price
+    # Price below panel
     price = scene.data.get("price", "")
     if price:
-        price_font = _load_font(72, bold=True)
+        price_font = _load_font(60, bold=True)
         price_bbox = draw.textbbox((0, 0), price, font=price_font)
         price_w = price_bbox[2] - price_bbox[0]
         draw.text(
-            ((w - price_w) // 2, h - 300),
+            ((w - price_w) // 2, panel_bottom + 40),
             price,
             fill=(255, 255, 255, 255),
             font=price_font,
-            stroke_width=3,
-            stroke_fill=(0, 0, 0, 255),
+            stroke_width=2,
+            stroke_fill=(0, 0, 0, 140),
         )
 
     return canvas.convert("RGB")
@@ -726,19 +622,9 @@ def _render_map_cta(scene: Scene) -> Image.Image:
 
 @_register(SceneType.OUTRO)
 def _render_outro(scene: Scene) -> Image.Image:
-    """Render the outro / contact card.
+    """Outro / contact card — the only scene with agent branding.
 
-    This delegates to the existing draw_outro_frame() in main.py
-    so we don't duplicate that complex rendering logic.
-
-    The import is lazy to avoid pulling in ffmpeg/supabase at module load.
-
-    data keys:
-        address (str)
-        price (str)
-        branding (dict)
-        template (str)
-        branding_assets (dict)
+    Delegates to draw_outro_frame() in main.py for full branding layout.
     """
     try:
         from ..main import draw_outro_frame as _draw_outro
@@ -750,8 +636,7 @@ def _render_outro(scene: Scene) -> Image.Image:
             branding_assets=scene.data.get("branding_assets"),
         )
     except ImportError:
-        # Fallback when main.py can't be imported (e.g. missing ffmpeg in test)
-        logger.warning("Cannot import draw_outro_frame from main — using fallback outro renderer")
+        logger.warning("Cannot import draw_outro_frame from main — using fallback")
         from .constants import FRAME_TEMPLATES
         w, h = CANVAS_W, CANVAS_H
         canvas = Image.new("RGB", (w, h), (14, 16, 20))
@@ -760,30 +645,26 @@ def _render_outro(scene: Scene) -> Image.Image:
         style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
         primary = style["primary"][:3]
 
-        title_font = _load_font(52, bold=True)
-        body_font = _load_font(38, bold=False)
-        price_font = _load_font(72, bold=True)
+        title_font = _load_font(48, bold=True)
+        body_font = _load_font(34, bold=False)
+        price_font = _load_font(64, bold=True)
 
         branding = scene.data.get("branding", {})
         address = scene.data.get("address", "")
         price = scene.data.get("price", "")
 
-        draw.text((64, 300), "Contact Listing Agent", fill=(255, 255, 255), font=title_font)
-        draw.rounded_rectangle((64, 420, 1016, 1100), radius=28, fill=(0, 0, 0, 200))
+        draw.text((64, 400), "Contact Agent", fill=(255, 255, 255), font=title_font)
 
-        y = 460
+        y = 500
         agent_name = branding.get("agent_name", "Your Agent")
-        draw.text((100, y), agent_name, fill=(255, 255, 255), font=body_font); y += 55
+        draw.text((100, y), agent_name, fill=(255, 255, 255), font=body_font)
+        y += 50
         if branding.get("agent_phone"):
-            draw.text((100, y), f"Call/Text: {branding['agent_phone']}", fill=(220, 220, 220), font=body_font); y += 55
+            draw.text((100, y), branding["agent_phone"], fill=(200, 200, 200), font=body_font)
+            y += 50
         if branding.get("broker_name"):
-            draw.text((100, y), branding["broker_name"], fill=(200, 200, 200), font=body_font)
+            draw.text((100, y), branding["broker_name"], fill=(180, 180, 180), font=body_font)
 
-        draw.rounded_rectangle((64, 1200, 1016, 1700), radius=28, fill=(0, 0, 0, 200))
-        addr_lines = _wrap_text(draw, address, body_font, 880, max_lines=2)
-        ay = 1240
-        for line in addr_lines:
-            draw.text((100, ay), line, fill=(255, 255, 255), font=body_font); ay += 55
-        draw.text((100, 1580), price, fill=(255, 255, 255), font=price_font)
+        draw.text((100, h - 300), price, fill=(255, 255, 255), font=price_font)
 
         return canvas
