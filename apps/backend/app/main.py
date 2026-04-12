@@ -1745,10 +1745,12 @@ def build_video(
                 pix_fmt="yuv420p",
                 r=30,
                 crf=30,
-                preset="veryfast",
+                preset="ultrafast",
                 movflags="+faststart",
                 an=None,
+                threads=1,
             )
+            .global_args("-threads", "1")
             .overwrite_output()
         )
         # Log the compiled FFmpeg command for debugging
@@ -1920,6 +1922,7 @@ def process_video_task(
         # The per-scene cleanup loop (below) closes scene.data images after use.
         del photos
         del enrichment
+        del branding_assets
         gc.collect()
 
         # --- Render scene frames ---
@@ -1948,6 +1951,20 @@ def process_video_task(
             # NOTE: Do NOT close scene.data images here — multiple scenes
             # share the same PIL Image references (e.g. bg_image = photos[0]).
             # Closing one scene's data would break later scenes that use it.
+
+        # --- FREE all PIL images in scene.data now that frames are on disk ---
+        # Collect unique Image objects first (many scenes share the same bg_image)
+        _seen_ids: set = set()
+        for _sc in scenes:
+            for _v in (_sc.data or {}).values():
+                if isinstance(_v, Image.Image) and id(_v) not in _seen_ids:
+                    _seen_ids.add(id(_v))
+                    try:
+                        _v.close()
+                    except Exception:
+                        pass
+            _sc.data = {}  # drop all references
+        del _seen_ids
         gc.collect()
 
         # --- Render hero text overlay (minimal address + price pop-in) ---
