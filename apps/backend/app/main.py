@@ -1559,7 +1559,7 @@ def build_video(
                 )
         else:
             # Photo scene — render at photo dimensions with Ken Burns,
-            # then pad + overlay (same as original pipeline)
+            # then pad to full frame size so xfade dimensions match card scenes
             z_expr, x_expr, y_expr, frame_count = _ken_burns_expr(index, scene)
             stream = (
                 ffmpeg
@@ -1570,6 +1570,7 @@ def build_video(
                 .filter("fps", 30)
                 .filter("trim", duration=scene.duration)
                 .filter("setpts", "PTS-STARTPTS")
+                .filter("pad", REEL_WIDTH, REEL_HEIGHT, REEL_MARGIN_X, REEL_PHOTO_TOP, color="0x12141C")
             )
 
         streams.append(stream)
@@ -1603,13 +1604,11 @@ def build_video(
             elapsed += durations[i] - transition_duration
         total = sum(durations) - transition_duration * (len(streams) - 1)
 
-    # For scenes that DON'T have their own overlay, we need to pad + overlay
-    # Check if ANY content scene lacks its own overlay
+    # For scenes that DON'T have their own overlay, we composite the global overlay
+    # (padding is now applied per-stream above so xfade dimensions match)
     has_photo_scenes = any(not s.has_own_overlay for s in content_scenes)
 
     if has_photo_scenes:
-        video = video.filter("pad", REEL_WIDTH, REEL_HEIGHT, REEL_MARGIN_X, REEL_PHOTO_TOP, color="0x121212")
-
         if overlay_frame is not None:
             overlay_stream = (
                 ffmpeg
