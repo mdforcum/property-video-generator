@@ -361,6 +361,8 @@ def _render_stats_card(scene: Scene) -> Image.Image:
         rows.append((_draw_icon_bed, str(scene.data["beds"]), "bedrooms"))
     if scene.data.get("baths"):
         rows.append((_draw_icon_bath, str(scene.data["baths"]), "bathrooms"))
+    if scene.data.get("lot_size"):
+        rows.append((_draw_icon_tree, str(scene.data["lot_size"]), ""))
 
     # Center the stats vertically
     row_height = 160
@@ -384,11 +386,14 @@ def _render_stats_card(scene: Scene) -> Image.Image:
         if i == len(rows) - 1 and len(rows) > 1:
             tw = _text_w(draw, combined, stat_value_font)
             pill_pad = 16
-            pill = Image.new("RGBA", (tw + pill_pad * 2 + 60, 80), (0, 0, 0, 0))
+            pill_w = tw + pill_pad * 2 + 80  # extra width for icon
+            pill_h = 80
+            pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
             pill_draw = ImageDraw.Draw(pill)
             pill_draw.rounded_rectangle((0, 0, pill.width - 1, pill.height - 1),
                                         radius=12, fill=(255, 255, 255, 220))
-            canvas.alpha_composite(pill, (text_x - pill_pad - 60, cy - 36))
+            pill_x = x_icon - pill_pad - 10  # start before icon
+            canvas.alpha_composite(pill, (pill_x, cy - 36))
             # Redraw icon and text in dark on the pill
             draw = ImageDraw.Draw(canvas)
             icon_fn(draw, x_icon, cy, size=56, fill=(*GRAD_START, 255))
@@ -431,6 +436,8 @@ def render_stats_video_clip(scene: Scene, temp_dir) -> Optional[Path]:
         rows.append((_draw_icon_bed, str(scene.data["beds"]), "bedrooms"))
     if scene.data.get("baths"):
         rows.append((_draw_icon_bath, str(scene.data["baths"]), "bathrooms"))
+    if scene.data.get("lot_size"):
+        rows.append((_draw_icon_tree, str(scene.data["lot_size"]), ""))
 
     row_height = 160
     total_h = len(rows) * row_height
@@ -468,11 +475,14 @@ def render_stats_video_clip(scene: Scene, temp_dir) -> Optional[Path]:
             if frame_num == 3 and i == len(rows) - 1 and len(rows) > 1:
                 tw = _text_w(draw, combined, stat_value_font)
                 pill_pad = 16
-                pill = Image.new("RGBA", (tw + pill_pad * 2 + 60, 80), (0, 0, 0, 0))
+                pill_w = tw + pill_pad * 2 + 80  # extra width for icon
+                pill_h = 80
+                pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
                 pill_draw = ImageDraw.Draw(pill)
                 pill_draw.rounded_rectangle((0, 0, pill.width - 1, pill.height - 1),
                                             radius=12, fill=(255, 255, 255, 220))
-                canvas.alpha_composite(pill, (text_x - pill_pad - 60, cy - 36))
+                pill_x = x_icon - pill_pad - 10  # start before icon
+                canvas.alpha_composite(pill, (pill_x, cy - 36))
                 # Redraw icon and text in dark on the pill
                 draw = ImageDraw.Draw(canvas)
                 icon_fn(draw, x_icon, cy, size=56, fill=(*GRAD_START, 255))

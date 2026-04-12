@@ -926,12 +926,53 @@ def upload_video_to_supabase(storage_path: str, video_bytes: bytes) -> None:
 
 
 def crop_9_16(img: Image.Image) -> Image.Image:
-    """Crop and resize image to exact 9:16 (1080x1920) aspect ratio."""
+    """Crop and resize image to exact 9:16 (1080x1920) aspect ratio.
+
+    For landscape-oriented photos (aspect ratio > 1.35:1), uses a
+    blur-fill technique: the full photo is shown centered with a
+    blurred, scaled copy filling the portrait background. This avoids
+    losing important parts of wide real-estate photos.
+    """
+    from PIL import ImageFilter
+
     source = img.convert("RGB")
     source_width, source_height = source.size
+    target_w, target_h = REEL_WIDTH, REEL_HEIGHT  # 1080 x 1920
+    source_aspect = source_width / source_height
+    target_aspect = target_w / target_h  # 0.5625
 
-    # Use full reel dimensions (9:16 = 1080x1920) for proper aspect ratio
-    target_w, target_h = REEL_WIDTH, REEL_HEIGHT
+    # If image is significantly landscape (wider than ~4:3 relative to target),
+    # use blur-fill instead of hard crop
+    if source_aspect > target_aspect * 1.4:
+        # --- Blur-fill approach ---
+        # 1. Create blurred background (cover-scale to fill frame)
+        cover_scale = max(target_w / source_width, target_h / source_height)
+        bg_w = int(source_width * cover_scale)
+        bg_h = int(source_height * cover_scale)
+        bg = source.resize((bg_w, bg_h), Image.Resampling.LANCZOS)
+        # Center-crop the background
+        bx = max(0, (bg_w - target_w) // 2)
+        by = max(0, (bg_h - target_h) // 2)
+        bg = bg.crop((bx, by, bx + target_w, by + target_h))
+        # Apply strong blur + darken for background
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=28))
+        from PIL import ImageEnhance
+        bg = ImageEnhance.Brightness(bg).enhance(0.45)
+
+        # 2. Contain-scale the sharp photo to fit within frame
+        contain_scale = min(target_w / source_width, target_h / source_height)
+        fg_w = int(source_width * contain_scale)
+        fg_h = int(source_height * contain_scale)
+        fg = source.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+
+        # 3. Composite sharp photo centered on blurred background
+        canvas = bg.convert("RGB")
+        paste_x = (target_w - fg_w) // 2
+        paste_y = (target_h - fg_h) // 2
+        canvas.paste(fg, (paste_x, paste_y))
+        return canvas
+
+    # --- Standard center-crop for portrait/square images ---
     cover_scale = max(target_w / source_width, target_h / source_height)
     scaled_width = int(source_width * cover_scale)
     scaled_height = int(source_height * cover_scale)
@@ -1142,6 +1183,7 @@ def _draw_hero_text_overlay(
     template: str = "new_listing",
     beds: str = "",
     city: str = "",
+    address_short: str = "",
 ) -> List[Image.Image]:
     """Hero overlay split into 2 layers for staggered 'print-on' animation.
 
@@ -1167,8 +1209,8 @@ def _draw_hero_text_overlay(
         parts = [p.strip() for p in address.split(",")]
         city = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
 
-    bed_part = f"{beds}-bedroom" if beds else "home"
-    headline = f"New {bed_part} available in {city} for"
+    bed_part = f"{beds} bedroom" if beds else "home"
+    headline = f"New to market — {bed_part} in {city} at {address_short}" if address_short else f"New to market — {bed_part} in {city}"
 
     margin = 80
     max_w = width - margin * 2
@@ -1197,13 +1239,16 @@ def _draw_hero_text_overlay(
     draw2 = ImageDraw.Draw(layer2)
 
     price_y = start_y + 10
+
+    # Measure price text precisely
     pbbox = draw2.textbbox((0, 0), price, font=headline_font)
     pw = pbbox[2] - pbbox[0]
     ph = pbbox[3] - pbbox[1]
+    p_y_offset = pbbox[1]  # top bearing offset
 
-    pill_pad_x, pill_pad_y = 20, 8
+    pill_pad_x, pill_pad_y = 28, 14
     pill_w = pw + pill_pad_x * 2
-    pill_h = ph + pill_pad_y * 2 + 10
+    pill_h = ph + pill_pad_y * 2
 
     pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
     pill_draw = ImageDraw.Draw(pill)
@@ -1211,15 +1256,66 @@ def _draw_hero_text_overlay(
         (0, 0, pill_w - 1, pill_h - 1), radius=14,
         fill=(13, 148, 136, 220),  # teal-600
     )
-    layer2.alpha_composite(pill, (margin, price_y - pill_pad_y))
+    pill_x = margin
+    pill_y = price_y
+    layer2.alpha_composite(pill, (pill_x, pill_y))
+
+    # Center text inside the pill
+    text_x = pill_x + pill_pad_x
+    text_y = pill_y + pill_pad_y - p_y_offset
     draw2 = ImageDraw.Draw(layer2)
     draw2.text(
-        (margin + pill_pad_x, price_y), price,
+        (text_x, text_y), price,
         fill=(255, 255, 255, 255), font=headline_font,
         stroke_width=1, stroke_fill=(0, 0, 0, 60),
     )
 
-    return [layer1, layer2]
+    # --- Counter effect: create intermediate price frames ---
+    # Generate 5 intermediate price values that "count up" to the final price
+    import random
+    price_clean = price.replace("$", "").replace(",", "")
+    counter_layers = []
+    try:
+        final_val = int(price_clean)
+        # Generate 5 counter values ramping up to final
+        counter_values = [
+            int(final_val * 0.3),
+            int(final_val * 0.5),
+            int(final_val * 0.7),
+            int(final_val * 0.85),
+            int(final_val * 0.95),
+        ]
+        for cv in counter_values:
+            cl = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            cd = ImageDraw.Draw(cl)
+            counter_text = f"${cv:,}"
+            cbbox = cd.textbbox((0, 0), counter_text, font=headline_font)
+            cpw = cbbox[2] - cbbox[0]
+            cph = cbbox[3] - cbbox[1]
+            cp_y_offset = cbbox[1]
+            c_pill_w = pw + pill_pad_x * 2  # Keep same pill width as final
+            c_pill_h = ph + pill_pad_y * 2
+            c_pill = Image.new("RGBA", (c_pill_w, c_pill_h), (0, 0, 0, 0))
+            c_pill_draw = ImageDraw.Draw(c_pill)
+            c_pill_draw.rounded_rectangle(
+                (0, 0, c_pill_w - 1, c_pill_h - 1), radius=14,
+                fill=(13, 148, 136, 220),
+            )
+            cl.alpha_composite(c_pill, (pill_x, pill_y))
+            cd = ImageDraw.Draw(cl)
+            # Center counter text in the same pill
+            c_text_x = pill_x + (c_pill_w - cpw) // 2
+            c_text_y = pill_y + pill_pad_y - cp_y_offset
+            cd.text(
+                (c_text_x, c_text_y), counter_text,
+                fill=(255, 255, 255, 255), font=headline_font,
+                stroke_width=1, stroke_fill=(0, 0, 0, 60),
+            )
+            counter_layers.append(cl)
+    except (ValueError, TypeError):
+        pass  # If price isn't numeric, skip counter
+
+    return [layer1] + counter_layers + [layer2]
 
 
 def draw_overlay_layer(
@@ -1711,10 +1807,30 @@ def build_video(
     # Hero text staggered overlays (headline fades in first, price pill follows)
     if overlay_frames:
         hero_dur = content_scenes[0].duration if content_scenes else 3.0
-        # Stagger timing: layer 0 at 0.2s, layer 1 at 0.8s, etc.
-        stagger_starts = [0.2, 0.8, 1.2, 1.6]
+        num_overlays = len(overlay_frames)
+        # Build stagger timing: headline at 0.2s, counter layers rapid, final price after
+        if num_overlays <= 2:
+            stagger_starts = [0.2, 0.8]
+        else:
+            stagger_starts = [0.2]  # headline
+            counter_count = num_overlays - 2
+            counter_start = 0.8
+            counter_interval = 0.12
+            for ci in range(counter_count):
+                stagger_starts.append(counter_start + ci * counter_interval)
+            stagger_starts.append(counter_start + counter_count * counter_interval + 0.08)
+
         for oi, opath in enumerate(overlay_frames):
             fade_in_start = stagger_starts[oi] if oi < len(stagger_starts) else 0.2 + oi * 0.5
+            is_counter = 0 < oi < num_overlays - 1 and num_overlays > 2
+            fade_dur_in = 0.08 if is_counter else 0.3
+            if is_counter:
+                next_start = stagger_starts[oi + 1] if oi + 1 < len(stagger_starts) else fade_in_start + 0.15
+                out_start = next_start - 0.04
+                fade_dur_out = 0.04
+            else:
+                out_start = hero_dur - 0.6
+                fade_dur_out = 0.4
             overlay_stream = (
                 ffmpeg
                 .input(str(opath), loop=1, t=hero_dur)
@@ -1723,8 +1839,8 @@ def build_video(
                 .filter("trim", duration=hero_dur)
                 .filter("setpts", "PTS-STARTPTS")
                 .filter("fps", 30)
-                .filter("fade", type="in", start_time=fade_in_start, duration=0.3, alpha=1)
-                .filter("fade", type="out", start_time=hero_dur - 0.6, duration=0.4, alpha=1)
+                .filter("fade", type="in", start_time=fade_in_start, duration=fade_dur_in, alpha=1)
+                .filter("fade", type="out", start_time=out_start, duration=fade_dur_out, alpha=1)
             )
             video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=0, eof_action="pass")
 
@@ -2010,10 +2126,14 @@ def process_video_task(
         overlay_paths: List[Path] = []
         has_photo_scenes = any(not s.has_own_overlay for s in scenes)
         if has_photo_scenes:
+            # Extract short address (street name portion)
+            _addr_parts = [p.strip() for p in address.split(",")]
+            _address_short = _addr_parts[0] if _addr_parts else address
             overlay_layers = _draw_hero_text_overlay(
                 REEL_WIDTH, REEL_HEIGHT, address, price,
                 template=template,
                 beds=_hero_beds,
+                address_short=_address_short,
             )
             for li, layer_img in enumerate(overlay_layers):
                 lpath = temp_dir / f"overlay_{li}.png"
