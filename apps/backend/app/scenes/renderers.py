@@ -119,18 +119,22 @@ def _draw_glass_panel(
     fill_alpha: int = 45,
     border_alpha: int = 50,
 ) -> None:
-    """Draw a frosted glass panel with subtle border."""
-    # Semi-transparent panel fill
-    panel = Image.new("RGBA", (x1 - x0, y1 - y0), (255, 255, 255, fill_alpha))
+    """Draw a frosted glass panel with subtle border via alpha compositing.
+
+    PIL's ImageDraw doesn't alpha-blend on RGBA canvases — it replaces pixels.
+    So we draw the panel on a separate transparent layer and composite it.
+    """
+    pw, ph = x1 - x0, y1 - y0
+    panel = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
     panel_draw = ImageDraw.Draw(panel)
-    # We draw on the canvas directly for the rounded rect
-    draw.rounded_rectangle(
-        (x0, y0, x1, y1),
+    panel_draw.rounded_rectangle(
+        (0, 0, pw - 1, ph - 1),
         radius=radius,
         fill=(255, 255, 255, fill_alpha),
         outline=(255, 255, 255, border_alpha),
         width=1,
     )
+    canvas.alpha_composite(panel, (x0, y0))
 
 
 def _center_text(
