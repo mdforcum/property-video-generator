@@ -1822,9 +1822,10 @@ def process_video_task(
         )
 
         # --- FREE photos & enrichment to reclaim memory ---
+        # NOTE: Do NOT close enrichment["map_image"] here — scenes hold
+        # a reference to the same PIL Image and need it during rendering.
+        # The per-scene cleanup loop (below) closes scene.data images after use.
         del photos
-        if enrichment.get("map_image") is not None:
-            enrichment["map_image"].close()
         del enrichment
         gc.collect()
 
