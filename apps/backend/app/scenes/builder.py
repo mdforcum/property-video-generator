@@ -9,8 +9,7 @@ Scene order matches the PS video structure:
   6. Features card (lot size / year built callout over photo)
   7. Map infographic (white bg, circular crop)
   8. Schools infographic (white bg, gradient-bordered cards)
-  9. CTA card (gradient bg, "Thinking of buying?" + agent name)
- 10. Outro (white bg, agent headshot, phone pill)
+  9. Outro (white bg, agent headshot, phone pill)
 """
 
 from __future__ import annotations
@@ -149,7 +148,7 @@ def build_scene_list(
     # 6. FEATURES CARD  (lot size / year built callout on photo)
     # ---------------------------------------------------------------
     if stats and (stats.get("lot_size") or stats.get("year_built")):
-        feat_bg = photos[-1] if len(photos) > 1 else bg_image
+        feat_bg = photos[0]
         scenes.append(Scene(
             scene_type=SceneType.FEATURES_CARD,
             has_own_overlay=True,
@@ -196,24 +195,7 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 9. CTA CARD  (gradient bg, "Thinking of buying?" + agent)
-    # ---------------------------------------------------------------
-    agent_name = (branding.get("agent_name") or "").strip()
-    scenes.append(Scene(
-        scene_type=SceneType.CTA_CARD,
-        has_own_overlay=True,
-        data={
-            "map_image": map_image,
-            "address": address,
-            "city": city,
-            "county": county,
-            "agent_name": agent_name,
-            "template": template,
-        },
-    ))
-
-    # ---------------------------------------------------------------
-    # 10. OUTRO  (white bg, agent headshot, gradient phone pill)
+    # 9. OUTRO  (white bg, agent headshot, gradient phone pill)
     # ---------------------------------------------------------------
     scenes.append(Scene(
         scene_type=SceneType.OUTRO,
@@ -225,6 +207,9 @@ def build_scene_list(
             "branding": branding,
             "template": template,
             "branding_assets": branding_assets,
+            "city": city,
+            "county": county,
+            "agent_name": (branding.get("agent_name") or "").strip(),
         },
     ))
 

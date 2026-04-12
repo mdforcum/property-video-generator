@@ -926,17 +926,20 @@ def upload_video_to_supabase(storage_path: str, video_bytes: bytes) -> None:
 
 
 def crop_9_16(img: Image.Image) -> Image.Image:
+    """Crop and resize image to exact 9:16 (1080x1920) aspect ratio."""
     source = img.convert("RGB")
     source_width, source_height = source.size
 
-    cover_scale = max(REEL_PHOTO_WIDTH / source_width, REEL_PHOTO_HEIGHT / source_height)
+    # Use full reel dimensions (9:16 = 1080x1920) for proper aspect ratio
+    target_w, target_h = REEL_WIDTH, REEL_HEIGHT
+    cover_scale = max(target_w / source_width, target_h / source_height)
     scaled_width = int(source_width * cover_scale)
     scaled_height = int(source_height * cover_scale)
     scaled = source.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
 
-    left = max(0, (scaled_width - REEL_PHOTO_WIDTH) // 2)
-    top = max(0, (scaled_height - REEL_PHOTO_HEIGHT) // 2)
-    cropped = scaled.crop((left, top, left + REEL_PHOTO_WIDTH, top + REEL_PHOTO_HEIGHT))
+    left = max(0, (scaled_width - target_w) // 2)
+    top = max(0, (scaled_height - target_h) // 2)
+    cropped = scaled.crop((left, top, left + target_w, top + target_h))
     return cropped.convert("RGB")
 
 
@@ -1139,17 +1142,13 @@ def _draw_hero_text_overlay(
     template: str = "new_listing",
     beds: str = "",
     city: str = "",
-) -> Image.Image:
-    """PropertySimple-style hero overlay — large bold text with price pill.
+) -> List[Image.Image]:
+    """Hero overlay split into 2 layers for staggered 'print-on' animation.
 
-    Layout:  "New {beds}-bedroom available in {city} for {price}"
-    where the price gets a purple highlight pill behind it.
+    Returns [headline_layer, price_layer] — each a transparent RGBA PNG.
+    The pipeline overlays them at staggered times for a text-reveal effect.
     """
-    base = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(base)
-
     ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
-    # Try Poppins first, fall back to system fonts
     headline_font = None
     for fpath in [
         ASSETS_DIR / "Poppins-Bold.ttf",
@@ -1164,8 +1163,6 @@ def _draw_hero_text_overlay(
     if headline_font is None:
         headline_font = _load_font(82, bold=True)
 
-    # Build the PS-style headline
-    # "New 4-bedroom available in Effingham for $249,900"
     if not city:
         parts = [p.strip() for p in address.split(",")]
         city = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
@@ -1173,62 +1170,56 @@ def _draw_hero_text_overlay(
     bed_part = f"{beds}-bedroom" if beds else "home"
     headline = f"New {bed_part} available in {city} for"
 
-    # Slight dark overlay for text readability
-    dark_layer = Image.new("RGBA", (width, height), (0, 0, 0, 60))
-    base.alpha_composite(dark_layer)
-    draw = ImageDraw.Draw(base)
-
-    # Word-wrap headline
     margin = 80
     max_w = width - margin * 2
-    lines = _wrap_text(draw, headline, headline_font, max_w, max_lines=5)
 
-    # Position text in center-left
+    # --- Layer 1: dark tint + headline text ---
+    layer1 = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    dark_tint = Image.new("RGBA", (width, height), (0, 0, 0, 60))
+    layer1.alpha_composite(dark_tint)
+    draw1 = ImageDraw.Draw(layer1)
+
+    lines = _wrap_text(draw1, headline, headline_font, max_w, max_lines=5)
     line_height = 100
-    total_text_h = len(lines) * line_height + 120  # extra for price
+    total_text_h = len(lines) * line_height + 120
     start_y = (height - total_text_h) // 2
 
     for line in lines:
-        draw.text(
+        draw1.text(
             (margin, start_y), line,
             fill=(255, 255, 255, 255), font=headline_font,
             stroke_width=3, stroke_fill=(0, 0, 0, 100),
         )
         start_y += line_height
 
-    # Price with purple highlight pill
+    # --- Layer 2: price pill (appears after headline) ---
+    layer2 = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw2 = ImageDraw.Draw(layer2)
+
     price_y = start_y + 10
-    price_font_obj = headline_font  # same size for consistency
-    pbbox = draw.textbbox((0, 0), price, font=price_font_obj)
+    pbbox = draw2.textbbox((0, 0), price, font=headline_font)
     pw = pbbox[2] - pbbox[0]
     ph = pbbox[3] - pbbox[1]
 
-    pill_pad_x = 20
-    pill_pad_y = 8
+    pill_pad_x, pill_pad_y = 20, 8
     pill_w = pw + pill_pad_x * 2
     pill_h = ph + pill_pad_y * 2 + 10
 
-    # Purple pill
     pill = Image.new("RGBA", (pill_w, pill_h), (0, 0, 0, 0))
     pill_draw = ImageDraw.Draw(pill)
     pill_draw.rounded_rectangle(
-        (0, 0, pill_w - 1, pill_h - 1),
-        radius=14,
-        fill=(147, 51, 234, 220),  # purple
+        (0, 0, pill_w - 1, pill_h - 1), radius=14,
+        fill=(13, 148, 136, 220),  # teal-600
     )
-    base.alpha_composite(pill, (margin, price_y - pill_pad_y))
-    draw = ImageDraw.Draw(base)
-
-    draw.text(
-        (margin + pill_pad_x, price_y),
-        price,
-        fill=(255, 255, 255, 255),
-        font=price_font_obj,
-        stroke_width=1,
-        stroke_fill=(0, 0, 0, 60),
+    layer2.alpha_composite(pill, (margin, price_y - pill_pad_y))
+    draw2 = ImageDraw.Draw(layer2)
+    draw2.text(
+        (margin + pill_pad_x, price_y), price,
+        fill=(255, 255, 255, 255), font=headline_font,
+        stroke_width=1, stroke_fill=(0, 0, 0, 60),
     )
 
-    return base
+    return [layer1, layer2]
 
 
 def draw_overlay_layer(
@@ -1522,7 +1513,7 @@ def draw_outro_frame(
 def build_video(
     scenes: List["Scene"],
     out_path: Path,
-    overlay_frame: Optional[Path] = None,
+    overlay_frames: Optional[List[Path]] = None,
     include_music: bool = True,
     motion_seed: str = "",
 ) -> None:
@@ -1618,7 +1609,19 @@ def build_video(
         if frame_path is None:
             raise ValueError(f"Scene {index} ({scene.scene_type}) has no frame_path set")
 
-        if scene.has_own_overlay:
+        if getattr(scene, 'is_video_clip', False) and str(frame_path).endswith('.mp4'):
+            # Pre-rendered video clip (e.g., animated stats) — read as video, no loop
+            stream = (
+                ffmpeg
+                .input(str(frame_path))
+                .filter("scale", REEL_WIDTH, REEL_HEIGHT)
+                .filter("setsar", "1")
+                .filter("trim", duration=scene.duration)
+                .filter("setpts", "PTS-STARTPTS")
+                .filter("fps", 30)
+                .filter("settb", "1/30")
+            )
+        elif scene.has_own_overlay:
             # Full-frame data card — render at full canvas size, static or slow zoom
             if scene.motion == MotionProfile.KEN_BURNS:
                 z_expr, x_expr, y_expr, frame_count = _ken_burns_expr(index, scene)
@@ -1703,24 +1706,27 @@ def build_video(
     total = sum(durations) - transition_duration * (len(streams) - 1)
 
     # Global overlay removed — photos are now full-bleed with no frame/branding.
-    # Hero text pop-in is handled via a separate overlay below.
+    # Hero text layers are overlaid with staggered timing for a 'print-on' effect.
 
-    # Hero text pop-in overlay (address + price fade in on first scene)
-    if overlay_frame is not None:
+    # Hero text staggered overlays (headline fades in first, price pill follows)
+    if overlay_frames:
         hero_dur = content_scenes[0].duration if content_scenes else 3.0
-        overlay_stream = (
-            ffmpeg
-            .input(str(overlay_frame), loop=1, t=hero_dur)
-            .filter("scale", REEL_WIDTH, REEL_HEIGHT)
-            .filter("format", "rgba")
-            .filter("trim", duration=hero_dur)
-            .filter("setpts", "PTS-STARTPTS")
-            .filter("fps", 30)
-            # Fade in at 0.3s, hold, fade out before transition
-            .filter("fade", type="in", start_time=0.3, duration=0.5, alpha=1)
-            .filter("fade", type="out", start_time=hero_dur - 0.8, duration=0.5, alpha=1)
-        )
-        video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=0, eof_action="pass")
+        # Stagger timing: layer 0 at 0.2s, layer 1 at 0.8s, etc.
+        stagger_starts = [0.2, 0.8, 1.2, 1.6]
+        for oi, opath in enumerate(overlay_frames):
+            fade_in_start = stagger_starts[oi] if oi < len(stagger_starts) else 0.2 + oi * 0.5
+            overlay_stream = (
+                ffmpeg
+                .input(str(opath), loop=1, t=hero_dur)
+                .filter("scale", REEL_WIDTH, REEL_HEIGHT)
+                .filter("format", "rgba")
+                .filter("trim", duration=hero_dur)
+                .filter("setpts", "PTS-STARTPTS")
+                .filter("fps", 30)
+                .filter("fade", type="in", start_time=fade_in_start, duration=0.3, alpha=1)
+                .filter("fade", type="out", start_time=hero_dur - 0.6, duration=0.4, alpha=1)
+            )
+            video = ffmpeg.overlay(video, overlay_stream, x=0, y=0, shortest=0, eof_action="pass")
 
     # Concat outro if present
     if outro_scene and outro_scene.frame_path:
@@ -1967,6 +1973,22 @@ def process_video_task(
             # share the same PIL Image references (e.g. bg_image = photos[0]).
             # Closing one scene's data would break later scenes that use it.
 
+        # --- Render stats as animated video clip (progressive text reveal) ---
+        for i, scene in enumerate(scenes):
+            if scene.scene_type == SceneType.STATS_CARD and scene.data:
+                try:
+                    from app.scenes.renderers import render_stats_video_clip
+                    clip_path = render_stats_video_clip(scene, temp_dir)
+                    if clip_path is not None:
+                        clip_path = Path(clip_path) if not isinstance(clip_path, Path) else clip_path
+                        if clip_path.exists():
+                            scene.frame_path = clip_path
+                            if str(clip_path).endswith('.mp4'):
+                                scene.is_video_clip = True
+                            print(f"  stats scene[{i}]: rendered as video clip {clip_path}", flush=True)
+                except Exception as e:
+                    print(f"  stats video clip failed, using static frame: {e}", flush=True)
+
         # --- FREE all PIL images in scene.data now that frames are on disk ---
         # Collect unique Image objects first (many scenes share the same bg_image)
         _seen_ids: set = set()
@@ -1982,21 +2004,23 @@ def process_video_task(
         del _seen_ids
         gc.collect()
 
-        # --- Render hero text overlay (minimal address + price pop-in) ---
+        # --- Render hero text overlays (staggered for animation) ---
         _set_step("render_overlay")
         _set_job_progress(job_id, 72)
-        overlay_path = None
+        overlay_paths: List[Path] = []
         has_photo_scenes = any(not s.has_own_overlay for s in scenes)
         if has_photo_scenes:
-            overlay_path = temp_dir / "overlay.png"
-            overlay_image = _draw_hero_text_overlay(
+            overlay_layers = _draw_hero_text_overlay(
                 REEL_WIDTH, REEL_HEIGHT, address, price,
                 template=template,
                 beds=_hero_beds,
             )
-            overlay_image.save(overlay_path)
-            overlay_image.close()
-            del overlay_image
+            for li, layer_img in enumerate(overlay_layers):
+                lpath = temp_dir / f"overlay_{li}.png"
+                layer_img.save(lpath)
+                overlay_paths.append(lpath)
+                layer_img.close()
+            del overlay_layers
             gc.collect()
 
         # --- Build video ---
@@ -2018,7 +2042,7 @@ def process_video_task(
         build_video(
             scenes,
             video_path,
-            overlay_frame=overlay_path,
+            overlay_frames=overlay_paths if overlay_paths else None,
             include_music=include_music,
             motion_seed=job_id,
         )

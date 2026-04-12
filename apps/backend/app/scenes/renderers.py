@@ -3,7 +3,7 @@
 Design philosophy — modelled after PropertySimple's social video output:
   • Photo scenes: full-bleed cropped photo, no overlay baked in (hero gets
     a separate FFmpeg text-reveal overlay).
-  • Stats overlay: vibrant purple→cyan gradient tint on the PHOTO itself
+  • Stats overlay: vibrant teal→amber gradient tint on the PHOTO itself
     with large icon-style stat callouts (sqft, beds, baths) — NOT a
     separate blurred-background card.
   • Description / features: large bold text directly over a lightly
@@ -12,13 +12,11 @@ Design philosophy — modelled after PropertySimple's social video output:
     distances in miles — professional, readable.
   • Map: white background, circular map crop, city/county header with
     location pin, price pin on map.
-  • CTA: purple→cyan gradient background, large bold "Thinking of buying
-    or selling?" text with agent CTA.
-  • Outro: white background, circular headshot, name, license, brokerage,
-    phone in gradient pill, email.
+  • Outro: teal→amber gradient background, company logo, CTA text, agent
+    contact info (circular headshot, name, phone, email).
 
 Typography: Poppins Bold for headlines, Poppins Medium/Regular for body.
-Colour identity: consistent purple (#9333EA) → cyan (#06B6D4) gradient.
+Colour identity: consistent teal (#0d9488) → amber (#f59e0b) gradient.
 """
 
 from __future__ import annotations
@@ -37,9 +35,9 @@ logger = logging.getLogger(__name__)
 CANVAS_W = 1080
 CANVAS_H = 1920
 
-# Brand gradient colours (PropertySimple-style purple → cyan)
-GRAD_PURPLE = (147, 51, 234)   # #9333EA
-GRAD_CYAN = (6, 182, 212)      # #06B6D4
+# Brand gradient colours (Deep Teal → Warm Amber)
+GRAD_START = (13, 148, 136)     # #0d9488 teal-600
+GRAD_END = (245, 158, 11)       # #f59e0b amber-500
 DARK_TEXT = (30, 30, 30)
 MID_TEXT = (80, 80, 80)
 LIGHT_TEXT = (140, 140, 140)
@@ -135,8 +133,8 @@ def _center_x(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, w
 # Gradient helpers
 # ---------------------------------------------------------------------------
 
-def _gradient_bar(w: int, h: int, left_color: Tuple[int, ...] = GRAD_PURPLE,
-                  right_color: Tuple[int, ...] = GRAD_CYAN, alpha: int = 255) -> Image.Image:
+def _gradient_bar(w: int, h: int, left_color: Tuple[int, ...] = GRAD_START,
+                  right_color: Tuple[int, ...] = GRAD_END, alpha: int = 255) -> Image.Image:
     """Horizontal gradient bar."""
     bar = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     for x in range(w):
@@ -148,21 +146,22 @@ def _gradient_bar(w: int, h: int, left_color: Tuple[int, ...] = GRAD_PURPLE,
     return bar
 
 
-def _gradient_bg(w: int = CANVAS_W, h: int = CANVAS_H) -> Image.Image:
-    """Full-canvas diagonal gradient purple→cyan."""
-    canvas = Image.new("RGBA", (w, h), (*GRAD_PURPLE, 255))
+def _gradient_bg(w: int = CANVAS_W, h: int = CANVAS_H, left_color: Tuple[int, ...] = GRAD_START,
+                 right_color: Tuple[int, ...] = GRAD_END) -> Image.Image:
+    """Full-canvas diagonal gradient teal→amber."""
+    canvas = Image.new("RGBA", (w, h), (*left_color, 255))
     for y in range(h):
         t = y / max(1, h - 1)
-        r = int(GRAD_PURPLE[0] * (1 - t) + GRAD_CYAN[0] * t)
-        g = int(GRAD_PURPLE[1] * (1 - t) + GRAD_CYAN[1] * t)
-        b = int(GRAD_PURPLE[2] * (1 - t) + GRAD_CYAN[2] * t)
+        r = int(left_color[0] * (1 - t) + right_color[0] * t)
+        g = int(left_color[1] * (1 - t) + right_color[1] * t)
+        b = int(left_color[2] * (1 - t) + right_color[2] * t)
         ImageDraw.Draw(canvas).line([(0, y), (w, y)], fill=(r, g, b, 255))
     return canvas
 
 
 def _gradient_tint_on_photo(photo: Image.Image, w: int = CANVAS_W, h: int = CANVAS_H,
                             opacity: int = 160) -> Image.Image:
-    """Purple→cyan gradient tint overlaid on a photo (for stats scene)."""
+    """Teal→amber gradient tint overlaid on a photo (for stats scene)."""
     base = photo.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
     grad = _gradient_bg(w, h)
     # Set gradient alpha
@@ -186,7 +185,7 @@ def _circular_crop(img: Image.Image, diameter: int) -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def _gradient_bordered_card(w: int, h: int, border_width: int = 3, radius: int = 16) -> Image.Image:
-    """White card with purple→cyan gradient border."""
+    """White card with teal→amber gradient border."""
     card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(card)
     # Gradient border (draw slightly larger rounded rect, then white inside)
@@ -194,7 +193,7 @@ def _gradient_bordered_card(w: int, h: int, border_width: int = 3, radius: int =
     grad = _gradient_bar(w, h)
     # Outer border
     draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=radius,
-                           fill=(160, 80, 220, 255), outline=None)
+                           fill=(*GRAD_START, 255), outline=None)
     # Inner white fill
     draw.rounded_rectangle(
         (border_width, border_width, w - 1 - border_width, h - 1 - border_width),
@@ -340,7 +339,7 @@ def _render_stats_card(scene: Scene) -> Image.Image:
     """Stats overlaid on gradient-tinted photo — PS style.
 
     Shows sqft, bedrooms, bathrooms as large icon+text rows over
-    a purple→cyan gradient-tinted listing photo.
+    a teal→amber gradient-tinted listing photo.
     """
     w, h = CANVAS_W, CANVAS_H
     bg = scene.data.get("bg_image")
@@ -392,11 +391,137 @@ def _render_stats_card(scene: Scene) -> Image.Image:
             canvas.alpha_composite(pill, (text_x - pill_pad - 60, cy - 36))
             # Redraw icon and text in dark on the pill
             draw = ImageDraw.Draw(canvas)
-            icon_fn(draw, x_icon, cy, size=56, fill=(*GRAD_PURPLE, 255))
+            icon_fn(draw, x_icon, cy, size=56, fill=(*GRAD_START, 255))
             draw.text((text_x, cy - 30), combined,
-                      fill=(*GRAD_PURPLE, 255), font=stat_value_font)
+                      fill=(*GRAD_START, 255), font=stat_value_font)
 
     return canvas.convert("RGB")
+
+
+def render_stats_video_clip(scene: Scene, temp_dir) -> Optional[Path]:
+    """Render 4 progressive PNG frames and create animated MP4 clip.
+
+    Frames:
+      Frame 0: just the gradient-tinted photo (no text)
+      Frame 1: photo + first stat
+      Frame 2: photo + first 2 stats
+      Frame 3: photo + all stats with pill
+
+    Returns path to the .mp4 clip.
+    """
+    from pathlib import Path
+    temp_path = Path(temp_dir)
+    temp_path.mkdir(parents=True, exist_ok=True)
+
+    w, h = CANVAS_W, CANVAS_H
+    bg = scene.data.get("bg_image")
+    if bg is not None:
+        base_canvas = _gradient_tint_on_photo(bg, w, h, opacity=170)
+    else:
+        base_canvas = _gradient_bg(w, h)
+
+    stat_value_font = _font(72, "bold")
+    stat_label_font = _font(48, "bold")
+
+    # Build stat rows: icon_drawer, value, label
+    rows: List[Tuple[Any, str, str]] = []
+    if scene.data.get("sqft"):
+        rows.append((_draw_icon_sqft, str(scene.data["sqft"]), "sqft"))
+    if scene.data.get("beds"):
+        rows.append((_draw_icon_bed, str(scene.data["beds"]), "bedrooms"))
+    if scene.data.get("baths"):
+        rows.append((_draw_icon_bath, str(scene.data["baths"]), "bathrooms"))
+
+    row_height = 160
+    total_h = len(rows) * row_height
+    start_y = (h - total_h) // 2
+
+    # Frame 0: Just the base photo
+    frame0_path = temp_path / "stats_f0.png"
+    base_canvas.convert("RGB").save(str(frame0_path))
+
+    # Frames 1-3: Progressive stat reveal
+    frames_to_render = [1, 2, 3]
+    frame_paths = [frame0_path]
+
+    for frame_num in frames_to_render:
+        if frame_num > len(rows):
+            continue
+
+        canvas = base_canvas.copy()
+        draw = ImageDraw.Draw(canvas)
+
+        # Draw first frame_num rows
+        for i in range(frame_num):
+            icon_fn, value, label = rows[i]
+            cy = start_y + i * row_height + row_height // 2
+            x_icon = 120
+
+            icon_fn(draw, x_icon, cy, size=56, fill=(255, 255, 255, 240))
+
+            combined = f"{value} {label}"
+            text_x = x_icon + 60
+            draw.text((text_x, cy - 30), combined, fill=(255, 255, 255, 255),
+                      font=stat_value_font)
+
+            # Draw pill on last visible row (only on frame 3)
+            if frame_num == 3 and i == len(rows) - 1 and len(rows) > 1:
+                tw = _text_w(draw, combined, stat_value_font)
+                pill_pad = 16
+                pill = Image.new("RGBA", (tw + pill_pad * 2 + 60, 80), (0, 0, 0, 0))
+                pill_draw = ImageDraw.Draw(pill)
+                pill_draw.rounded_rectangle((0, 0, pill.width - 1, pill.height - 1),
+                                            radius=12, fill=(255, 255, 255, 220))
+                canvas.alpha_composite(pill, (text_x - pill_pad - 60, cy - 36))
+                # Redraw icon and text in dark on the pill
+                draw = ImageDraw.Draw(canvas)
+                icon_fn(draw, x_icon, cy, size=56, fill=(*GRAD_START, 255))
+                draw.text((text_x, cy - 30), combined,
+                          fill=(*GRAD_START, 255), font=stat_value_font)
+
+        frame_path = temp_path / f"stats_f{frame_num}.png"
+        canvas.convert("RGB").save(str(frame_path))
+        frame_paths.append(frame_path)
+
+    # Create MP4 with FFmpeg — concat each frame held for ~0.8s
+    output_path = temp_path / "stats_animation.mp4"
+    n_frames = len(frame_paths)
+
+    if n_frames <= 1:
+        # Single frame — just return the PNG path, no video needed
+        return frame_paths[0] if frame_paths else None
+
+    try:
+        import subprocess
+        hold_duration = max(0.5, scene.duration / n_frames)
+
+        # Build ffmpeg command with concat demuxer
+        concat_list = temp_path / "stats_concat.txt"
+        with open(concat_list, "w") as f:
+            for fp in frame_paths:
+                f.write(f"file '{fp}'\n")
+                f.write(f"duration {hold_duration:.2f}\n")
+            # Repeat last file (ffmpeg concat demuxer quirk)
+            f.write(f"file '{frame_paths[-1]}'\n")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_list),
+            "-vf", f"scale={CANVAS_W}:{CANVAS_H},format=yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-crf", "28", "-r", "30", "-threads", "1",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+        subprocess.run(cmd, capture_output=True, check=True, timeout=30)
+        logger.info("Stats animation clip created: %s", output_path)
+
+    except Exception as e:
+        logger.warning("FFmpeg animation failed, using last frame as fallback: %s", e)
+        # Fallback: return last PNG so pipeline uses it as static frame
+        return frame_paths[-1]
+
+    return output_path
 
 
 # ============================================================================
@@ -463,9 +588,10 @@ def _render_features_card(scene: Scene) -> Image.Image:
     bg = scene.data.get("bg_image")
     if bg is not None:
         canvas = bg.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        # Subtle darken at bottom for text
-        dark = Image.new("RGBA", (w, h // 3), (0, 0, 0, 140))
-        canvas.alpha_composite(dark, (0, h - h // 3))
+        # Subtle darken at bottom for text (reduced to 160px)
+        shade_height = 160
+        dark = Image.new("RGBA", (w, shade_height), (0, 0, 0, 140))
+        canvas.alpha_composite(dark, (0, h - shade_height))
     else:
         canvas = Image.new("RGBA", (w, h), (20, 20, 30, 255))
     draw = ImageDraw.Draw(canvas)
@@ -490,7 +616,7 @@ def _render_features_card(scene: Scene) -> Image.Image:
     # Display as bottom bar with icon
     if features_display:
         label, value, icon_fn = features_display[0]  # Show primary feature
-        bar_y = h - 220
+        bar_y = h - 140
         # Icon
         icon_fn(draw, 100, bar_y + 40, size=56, fill=(255, 255, 255, 230))
         # Label
@@ -570,9 +696,9 @@ def _render_schools_card(scene: Scene) -> Image.Image:
         if distance:
             dist_str = str(distance)
             dw = _text_w(draw, dist_str, dist_font)
-            # Use gradient purple color for distance
+            # Use gradient teal color for distance
             draw.text((w - 120 - dw, card_y + card_h // 2 - 24), dist_str,
-                      fill=GRAD_PURPLE, font=dist_font)
+                      fill=GRAD_START, font=dist_font)
 
         card_y += card_h + card_gap
 
@@ -594,14 +720,26 @@ def _render_map_cta(scene: Scene) -> Image.Image:
     county = scene.data.get("county", "")
     price = scene.data.get("price", "")
     map_img = scene.data.get("map_image")
+    address = scene.data.get("address", "")
 
     # City header with location pin
     header_font = _font(72, "bold")
     sub_font = _font(36, "bold")
 
     _draw_icon_pin(draw, 100, 280, size=64, fill=DARK_TEXT)
-    city_display = city if city else scene.data.get("address", "").split(",")[0] if scene.data.get("address") else ""
-    draw.text((150, 240), city_display, fill=DARK_TEXT, font=header_font)
+    city_display = city if city else (address.split(",")[0] if address else "")
+
+    # Wrap city text to avoid overflow, reduce font size if needed
+    city_lines = _wrap(draw, city_display, header_font, w - 200, max_lines=2)
+    if len(city_lines) > 1 or _text_w(draw, city_display, header_font) > w - 200:
+        header_font = _font(56, "bold")
+        city_lines = _wrap(draw, city_display, header_font, w - 200, max_lines=2)
+
+    if city_lines:
+        draw.text((150, 240), city_lines[0], fill=DARK_TEXT, font=header_font)
+        if len(city_lines) > 1:
+            draw.text((150, 310), city_lines[1], fill=DARK_TEXT, font=header_font)
+
     if county:
         draw.text((150, 330), county.upper(), fill=LIGHT_TEXT, font=sub_font)
 
@@ -633,11 +771,11 @@ def _render_map_cta(scene: Scene) -> Image.Image:
             pin_layer = Image.new("RGBA", (pin_w, pin_h + 16), (0, 0, 0, 0))
             pin_draw = ImageDraw.Draw(pin_layer)
             pin_draw.rounded_rectangle((0, 0, pin_w - 1, pin_h - 1), radius=10,
-                                       fill=(*GRAD_PURPLE, 230))
+                                       fill=(*GRAD_START, 230))
             # Triangle pointer
             tri_cx = pin_w // 2
             pin_draw.polygon([(tri_cx - 10, pin_h - 2), (tri_cx + 10, pin_h - 2),
-                              (tri_cx, pin_h + 14)], fill=(*GRAD_PURPLE, 230))
+                              (tri_cx, pin_h + 14)], fill=(*GRAD_START, 230))
             canvas.alpha_composite(pin_layer, (pin_x, pin_y))
             draw = ImageDraw.Draw(canvas)
 
@@ -658,87 +796,80 @@ def _render_map_cta(scene: Scene) -> Image.Image:
 
 
 # ============================================================================
-# CTA — gradient background with bold text
-# ============================================================================
-
-@_register(SceneType.CTA_CARD)
-def _render_cta_card(scene: Scene) -> Image.Image:
-    """Call-to-action with gradient background — PS style."""
-    w, h = CANVAS_W, CANVAS_H
-
-    # Gradient background with map underneath
-    map_img = scene.data.get("map_image")
-    if map_img is not None:
-        canvas = map_img.copy().convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
-        # Gradient overlay
-        grad = _gradient_bg(w, h)
-        grad.putalpha(Image.new("L", (w, h), 180))
-        canvas.alpha_composite(grad)
-    else:
-        canvas = _gradient_bg(w, h)
-    draw = ImageDraw.Draw(canvas)
-
-    county = scene.data.get("county", "")
-    agent_name = scene.data.get("agent_name", "")
-    city = scene.data.get("city", "")
-    location = county if county else city
-
-    # House icon
-    _draw_icon_house(draw, 120, h // 2 - 200, size=80, fill=(255, 255, 255, 230))
-
-    # Bold CTA text
-    cta_font = _font(72, "bold")
-    margin = 80
-
-    cta_text = f"Thinking of buying or selling in {location}?" if location else "Thinking of buying or selling?"
-    lines = _wrap(draw, cta_text, cta_font, w - margin * 2, max_lines=5)
-
-    y = h // 2 - 160
-    for line in lines:
-        draw.text((margin, y), line, fill=(255, 255, 255, 255), font=cta_font)
-        y += 90
-
-    # Agent CTA pill
-    if agent_name:
-        first_name = agent_name.split()[0] if agent_name else ""
-        call_text = f"Call {first_name}!"
-        call_font = _font(56, "bold")
-        tw = _text_w(draw, call_text, call_font)
-        pill_w = tw + 48
-        pill_h = 76
-        pill_x = margin
-        pill_y = y + 20
-        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h),
-                               radius=pill_h // 2, fill=(255, 255, 255, 255))
-        draw.text((pill_x + 24, pill_y + 10), call_text,
-                  fill=DARK_TEXT, font=call_font)
-
-    return canvas.convert("RGB")
-
-
-# ============================================================================
-# OUTRO — white bg, circular headshot, gradient phone pill — PS style
+# OUTRO — gradient background with company logo, CTA text, agent contact info
 # ============================================================================
 
 @_register(SceneType.OUTRO)
 def _render_outro(scene: Scene) -> Image.Image:
-    """Clean white agent contact card — PS style."""
+    """Merged CTA + contact card with gradient background.
+
+    Layout (top to bottom):
+    - Teal→amber gradient background
+    - Company logo (350px max width, 140px max height)
+    - "Thinking of buying or selling?" text (white, bold 56px)
+    - Location text (white, 36px)
+    - Horizontal divider line (white, 50% opacity)
+    - Circular agent headshot (320px diameter)
+    - Agent name (white, bold 64px)
+    - Brokerage name (white, regular 32px)
+    - Phone number in white pill (solid white bg, dark text)
+    - Email with envelope icon (white text)
+    """
     w, h = CANVAS_W, CANVAS_H
-    canvas = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+    canvas = _gradient_bg(w, h, GRAD_START, GRAD_END)
     draw = ImageDraw.Draw(canvas)
 
     branding = scene.data.get("branding", {})
     branding_assets = scene.data.get("branding_assets", {})
+    city = scene.data.get("city", "")
+    county = scene.data.get("county", "")
+    agent_name = scene.data.get("agent_name", "")
 
-    name_font = _font(72, "bold")
-    detail_font = _font(36, "regular")
-    phone_font = _font(52, "bold")
-    email_font = _font(36, "regular")
+    # Fonts
+    cta_font = _font(56, "bold")
+    location_font = _font(36, "medium")
+    name_font = _font(64, "bold")
+    broker_font = _font(32, "regular")
+    phone_font = _font(40, "bold")
+    email_font = _font(28, "regular")
+    divider_y = 400
 
-    # Agent photo — circular crop
+    # Company logo at top
+    broker_logo = branding_assets.get("broker_logo") if branding_assets else None
+    if broker_logo is not None:
+        logo = broker_logo.copy().convert("RGBA")
+        logo.thumbnail((350, 140), Image.Resampling.LANCZOS)
+        logo_x = (w - logo.width) // 2
+        canvas.alpha_composite(logo, (logo_x, 80))
+
+    # "Thinking of buying or selling?" text
+    location = county if county else city
+    cta_text = f"Thinking of buying or selling in {location}?" if location else "Thinking of buying or selling?"
+    margin = 60
+    cta_lines = _wrap(draw, cta_text, cta_font, w - margin * 2, max_lines=4)
+
+    cta_y = 260
+    for line in cta_lines:
+        draw.text((margin, cta_y), line, fill=(255, 255, 255, 255), font=cta_font)
+        cta_y += 70
+
+    # Location display (county/city)
+    if location:
+        loc_w = _text_w(draw, location.upper(), location_font)
+        draw.text(((w - loc_w) // 2, cta_y + 30), location.upper(),
+                  fill=(255, 255, 255, 255), font=location_font)
+
+    # Horizontal divider line (white, 50% opacity)
+    divider_y = cta_y + 100
+    divider = Image.new("RGBA", (w, 2), (0, 0, 0, 0))
+    divider_draw = ImageDraw.Draw(divider)
+    divider_draw.rectangle((0, 0, w - 1, 1), fill=(255, 255, 255, 128))
+    canvas.alpha_composite(divider, (0, divider_y))
+
+    # Circular agent headshot (320px diameter)
     agent_photo = branding_assets.get("agent_photo") if branding_assets else None
-    photo_diameter = 240
-    photo_y = 480
+    photo_diameter = 320
+    photo_y = divider_y + 80
 
     if agent_photo is not None:
         circular = _circular_crop(agent_photo, photo_diameter)
@@ -746,77 +877,59 @@ def _render_outro(scene: Scene) -> Image.Image:
         draw = ImageDraw.Draw(canvas)
 
     # Agent name
-    agent_name = (branding.get("agent_name") or "").strip()
     name_y = photo_y + photo_diameter + 60
     if agent_name:
         nw = _text_w(draw, agent_name, name_font)
-        draw.text(((w - nw) // 2, name_y), agent_name, fill=DARK_TEXT, font=name_font)
+        draw.text(((w - nw) // 2, name_y), agent_name, fill=(255, 255, 255, 255),
+                  font=name_font)
 
-    # License and brokerage
-    info_y = name_y + 100
-    license_num = (branding.get("license_number") or "").strip()
+    # Brokerage name
     broker_name = (branding.get("broker_name") or "").strip()
-
-    if license_num:
-        lic_text = f"License: {license_num}"
-        lw = _text_w(draw, lic_text, detail_font)
-        draw.text(((w - lw) // 2, info_y), lic_text, fill=MID_TEXT, font=detail_font)
-        info_y += 52
-
+    broker_y = name_y + 90
     if broker_name:
-        bw = _text_w(draw, broker_name, detail_font)
-        draw.text(((w - bw) // 2, info_y), broker_name, fill=MID_TEXT, font=detail_font)
-        info_y += 52
+        bw = _text_w(draw, broker_name, broker_font)
+        draw.text(((w - bw) // 2, broker_y), broker_name, fill=(255, 255, 255, 255),
+                  font=broker_font)
 
-    # Phone number in gradient pill
+    # Phone number in solid white pill (dark text inside)
     agent_phone = (branding.get("agent_phone") or "").strip()
+    phone_y = broker_y + 80
     if agent_phone:
         phone_display = agent_phone
-        pill_y = info_y + 50
         tw = _text_w(draw, phone_display, phone_font)
-        pill_w = tw + 100
-        pill_h = 80
+        pill_w = tw + 80
+        pill_h = 68
         pill_x = (w - pill_w) // 2
 
-        # Gradient pill
-        pill = _gradient_bar(pill_w, pill_h)
+        # Solid white pill background
+        pill = Image.new("RGBA", (pill_w, pill_h), (255, 255, 255, 255))
         pill_mask = Image.new("L", (pill_w, pill_h), 0)
         ImageDraw.Draw(pill_mask).rounded_rectangle(
             (0, 0, pill_w - 1, pill_h - 1), radius=pill_h // 2, fill=255)
         pill.putalpha(pill_mask)
-        canvas.alpha_composite(pill, (pill_x, pill_y))
+        canvas.alpha_composite(pill, (pill_x, phone_y))
         draw = ImageDraw.Draw(canvas)
 
-        # Phone icon (simple circle with handset)
-        icon_x = pill_x + 36
-        icon_cy = pill_y + pill_h // 2
-        draw.ellipse((icon_x - 12, icon_cy - 12, icon_x + 12, icon_cy + 12),
-                     fill=(255, 255, 255, 255))
+        # Dark text on white pill
+        draw.text((pill_x + 40, phone_y + 12), phone_display,
+                  fill=DARK_TEXT, font=phone_font)
+        info_y = phone_y + pill_h
 
-        draw.text((pill_x + 68, pill_y + 12), phone_display,
-                  fill=(255, 255, 255, 255), font=phone_font)
-        info_y = pill_y + pill_h
-
-    # Email
+    # Email with envelope icon
     agent_email = (branding.get("agent_email") or "").strip()
     if agent_email:
-        email_y = info_y + 30
-        # Email icon (envelope)
+        email_y = info_y + 50
         ew = _text_w(draw, agent_email, email_font)
         total_w = ew + 44
         ex = (w - total_w) // 2
-        # Simple envelope
-        draw.rectangle((ex, email_y + 6, ex + 28, email_y + 22), outline=DARK_TEXT, width=2)
-        draw.line([(ex, email_y + 6), (ex + 14, email_y + 16), (ex + 28, email_y + 6)],
-                  fill=DARK_TEXT, width=2)
-        draw.text((ex + 44, email_y), agent_email, fill=DARK_TEXT, font=email_font)
 
-    # Broker logo at top
-    broker_logo = branding_assets.get("broker_logo") if branding_assets else None
-    if broker_logo is not None:
-        logo = broker_logo.copy().convert("RGBA")
-        logo.thumbnail((280, 100), Image.Resampling.LANCZOS)
-        canvas.alpha_composite(logo, ((w - logo.width) // 2, 200))
+        # Envelope icon in white
+        draw.rectangle((ex, email_y + 6, ex + 28, email_y + 22), outline=(255, 255, 255, 255), width=2)
+        draw.line([(ex, email_y + 6), (ex + 14, email_y + 16), (ex + 28, email_y + 6)],
+                  fill=(255, 255, 255, 255), width=2)
+
+        # Email text in white
+        draw.text((ex + 44, email_y), agent_email, fill=(255, 255, 255, 255), font=email_font)
 
     return canvas.convert("RGB")
 

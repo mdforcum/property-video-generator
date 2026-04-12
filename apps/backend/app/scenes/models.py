@@ -55,7 +55,7 @@ DEFAULT_DURATIONS: Dict[SceneType, float] = {
     SceneType.SCHOOLS_CARD: 3.5,
     SceneType.MAP_CTA: 3.0,
     SceneType.CTA_CARD: 3.5,
-    SceneType.OUTRO: 3.0,
+    SceneType.OUTRO: 4.5,  # Combined CTA + contact card needs more time
 }
 
 # Default motion profiles per scene type
@@ -104,6 +104,7 @@ class Scene:
 
     has_own_overlay: bool = False
     transition: Optional[str] = None
+    is_video_clip: bool = False  # True if frame_path is a .mp4 video clip
 
     def __post_init__(self) -> None:
         if self.duration <= 0:
