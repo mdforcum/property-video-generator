@@ -1695,7 +1695,7 @@ def build_video(
         )
         # Log the compiled FFmpeg command for debugging
         cmd_args = ffmpeg_stream.compile()
-        logger.info("FFmpeg command: %s", " ".join(cmd_args))
+        print(f"FFmpeg command: {' '.join(cmd_args)}", flush=True)
         ffmpeg_stream.run(capture_stdout=True, capture_stderr=True)
 
         if music_enabled:
@@ -1913,12 +1913,17 @@ def process_video_task(
         # --- Build video ---
         _set_step("build_video")
         _set_job_progress(job_id, 80)
-        logger.info(
-            "build_video: %d scenes — %s | durations: %s",
-            len(scenes),
-            [f"{s.scene_type.value}({s.motion.value})" for s in scenes],
-            [s.duration for s in scenes],
+        print(
+            f"build_video: {len(scenes)} scenes — "
+            f"{[f'{s.scene_type.value}({s.motion.value})' for s in scenes]} | "
+            f"durations: {[s.duration for s in scenes]}",
+            flush=True,
         )
+        # Log frame paths and file sizes for debugging
+        for i, sc in enumerate(scenes):
+            fp = sc.frame_path
+            sz = fp.stat().st_size if fp and fp.exists() else "MISSING"
+            print(f"  scene[{i}] {sc.scene_type.value}: {fp} ({sz} bytes) overlay={sc.has_own_overlay} motion={sc.motion.value}", flush=True)
         video_path = temp_dir / f"{job_id}.mp4"
         _ensure_within_runtime_limit()
         build_video(
