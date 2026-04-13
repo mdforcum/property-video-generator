@@ -861,7 +861,12 @@ def scrape_listing(url: str) -> Tuple[str, str, List[str], Dict[str, str]]:
 
 
 def download_image(url: str, out_path: Path) -> None:
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}, timeout=25)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        "Referer": "https://shelbyrealty.idxbroker.com/",
+    }
+    response = requests.get(url, headers=headers, timeout=25)
     response.raise_for_status()
     out_path.write_bytes(response.content)
 
@@ -1963,7 +1968,8 @@ def process_video_task(
                 img = Image.open(raw).convert("RGB")
                 img = crop_9_16(img)
                 photos.append(img)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Image %d download failed (%s): %s", i, image_url, exc)
                 continue
             finally:
                 # Remove raw download from disk immediately
