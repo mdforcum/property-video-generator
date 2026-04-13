@@ -794,15 +794,16 @@ def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str,
     return address, price, image_urls, branding
 
 
-def scrape_listing(url: str) -> Tuple[str, str, List[str], Dict[str, str]]:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
-    response = requests.get(url, headers=headers, timeout=25)
-    response.raise_for_status()
-    html = response.text
+def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List[str], Dict[str, str]]:
+    if html is None:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        response = requests.get(url, headers=headers, timeout=25)
+        response.raise_for_status()
+        html = response.text
 
     shelby_data = _extract_shelby_idx_listing(url, html)
     if shelby_data:
@@ -1925,7 +1926,7 @@ def process_video_task(
         html_response.raise_for_status()
         raw_html = html_response.text
 
-        address, price, image_urls, branding = scrape_listing(url)
+        address, price, image_urls, branding = scrape_listing(url, html=raw_html)
         image_urls = image_urls[:MAX_SOURCE_IMAGES]
         update_job(job_id, "processing", None, None, branding=branding)
 
