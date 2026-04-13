@@ -163,36 +163,12 @@ def build_scene_list(
         ))
 
     # ---------------------------------------------------------------
-    # 7. MAP INFOGRAPHIC  (white bg, circular map crop)
+    # 7. MAP INFOGRAPHIC  — REMOVED
     # ---------------------------------------------------------------
-    scenes.append(Scene(
-        scene_type=SceneType.MAP_CTA,
-        has_own_overlay=True,
-        data={
-            "map_image": map_image,
-            "address": address,
-            "price": price,
-            "city": city,
-            "county": county,
-            "template": template,
-        },
-    ))
 
     # ---------------------------------------------------------------
-    # 8. SCHOOLS INFOGRAPHIC  (white bg, gradient-bordered cards)
+    # 8. SCHOOLS INFOGRAPHIC  — REMOVED
     # ---------------------------------------------------------------
-    if schools and len(schools) >= 1:
-        scenes.append(Scene(
-            scene_type=SceneType.SCHOOLS_CARD,
-            has_own_overlay=True,
-            data={
-                "schools": schools,
-                "address": address,
-                "city": city,
-                "county": county,
-                "template": template,
-            },
-        ))
 
     # ---------------------------------------------------------------
     # 9. OUTRO  (white bg, agent headshot, gradient phone pill)

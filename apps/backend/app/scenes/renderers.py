@@ -617,7 +617,7 @@ def _render_features_card(scene: Scene) -> Image.Image:
     # Build feature pairs
     features_display: List[Tuple[str, str, Any]] = []
     if lot_size:
-        features_display.append(("acres", str(lot_size), _draw_icon_tree))
+        features_display.append(("Lot Size", str(lot_size), _draw_icon_tree))
     if year_built:
         features_display.append(("built", str(year_built), _draw_icon_house))
     if garage:
