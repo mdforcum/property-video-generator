@@ -624,7 +624,7 @@ def _format_price(value: object) -> str:
 
 
 def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
-    if "shelbyrealty.com" not in url or "/idx/listing/" not in url:
+    if "shelbyrealty" not in url or "/idx/" not in url:
         return None
 
     state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;", html, re.DOTALL)
