@@ -625,15 +625,35 @@ def _format_price(value: object) -> str:
 
 def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
     if "shelbyrealty" not in url or "/idx/" not in url:
+        logger.info("Shelby extractor: URL guard failed for %s", url)
         return None
+
+    logger.info("Shelby extractor: URL matched, HTML length=%d, __PRELOADED_STATE__ present=%s",
+                len(html), "__PRELOADED_STATE__" in html)
 
     state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;", html, re.DOTALL)
     if not state_match:
+        # Try alternate pattern — some pages use window.__PRELOADED_STATE__
+        state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.+\})\s*;", html, re.DOTALL)
+        if not state_match:
+            logger.warning("Shelby extractor: __PRELOADED_STATE__ regex did not match (present in html: %s)",
+                           "__PRELOADED_STATE__" in html)
+            # Log a snippet of HTML around __PRELOADED_STATE__ if it exists
+            idx = html.find("__PRELOADED_STATE__")
+            if idx >= 0:
+                snippet = html[max(0, idx - 20):idx + 200]
+                logger.warning("Shelby extractor: HTML snippet around __PRELOADED_STATE__: %.300s", snippet)
+            return None
+
+    try:
+        state = json.loads(state_match.group(1))
+    except json.JSONDecodeError as e:
+        logger.warning("Shelby extractor: JSON parse failed: %s (matched length=%d)", e, len(state_match.group(1)))
         return None
 
-    state = json.loads(state_match.group(1))
     listings = state.get("listings") or {}
     if not isinstance(listings, dict) or not listings:
+        logger.warning("Shelby extractor: no listings dict in state (keys: %s)", list(state.keys())[:10])
         return None
 
     listing_key_match = re.search(r"/idx/listing/([^/]+)/([^/]+)(?:/|$)", url)
@@ -674,7 +694,14 @@ def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str,
                 img_url = f"{img_url}?v={version}&width=1280&height=960"
             image_urls.append(img_url)
 
+    logger.info("Shelby extractor: mls_id=%s, mls_no=%s, photo_codes=%d, image_urls=%d",
+                mls_id, mls_no, len(photo_codes), len(image_urls))
+    if image_urls:
+        logger.info("Shelby extractor: first image URL: %s", image_urls[0][:120])
+
     if not image_urls:
+        logger.warning("Shelby extractor: no image URLs built (mls_id=%s, mls_no=%s, photos=%s)",
+                       mls_id, mls_no, photo_codes[:3])
         return None
 
     agent_profiles = ((state.get("agentProfiles") or {}).get("byId") or {})
