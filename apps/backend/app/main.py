@@ -652,7 +652,7 @@ def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str,
     city = (listing.get("city") or "").strip()
     state_code = (listing.get("state") or "").strip()
     postal = (listing.get("zip") or "").strip()
-    address = " ".join([x for x in [street, city, state_code, postal] if x]).strip() or "Property Listing"
+    address = ", ".join([x for x in [street, city, state_code + (" " + postal if postal else "")] if x]).strip() or "Property Listing"
 
     price = _format_price(listing.get("price"))
 
