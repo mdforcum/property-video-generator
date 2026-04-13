@@ -795,7 +795,11 @@ def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str,
 
 
 def scrape_listing(url: str) -> Tuple[str, str, List[str], Dict[str, str]]:
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
     response = requests.get(url, headers=headers, timeout=25)
     response.raise_for_status()
     html = response.text
@@ -857,7 +861,7 @@ def scrape_listing(url: str) -> Tuple[str, str, List[str], Dict[str, str]]:
 
 
 def download_image(url: str, out_path: Path) -> None:
-    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+    response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}, timeout=25)
     response.raise_for_status()
     out_path.write_bytes(response.content)
 
@@ -1908,7 +1912,11 @@ def process_video_task(
         _set_step("scrape_listing")
         _set_job_progress(job_id, 12)
         # Fetch HTML once — used by both scrape_listing and enrichment
-        html_response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        html_response = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }, timeout=25)
         html_response.raise_for_status()
         raw_html = html_response.text
 
