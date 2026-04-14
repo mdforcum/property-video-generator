@@ -886,13 +886,12 @@ def _render_outro(scene: Scene) -> Image.Image:
     county = scene.data.get("county", "")
     agent_name = scene.data.get("agent_name", "")
 
-    # Fonts — all enlarged
-    name_font = _font(80, "bold")
-    broker_font = _font(40, "regular")
-    phone_font = _font(52, "bold")
-    email_font = _font(34, "regular")
+    # Fonts — doubled agent name, phone, email
+    name_font = _font(160, "bold")
+    phone_font = _font(104, "bold")
+    email_font = _font(68, "regular")
     toll_free_font = _font(44, "bold")
-    office_font = _font(52, "regular")        # doubled from 26
+    office_font = _font(52, "regular")
     margin = 50
     y = 40
 
@@ -931,26 +930,30 @@ def _render_outro(scene: Scene) -> Image.Image:
     else:
         y += 40
 
-    # --- Agent name (enlarged) ---
+    # --- Agent name (doubled to 160px) ---
     if agent_name:
         nw = _text_w(draw, agent_name, name_font)
-        draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=name_font)
-        y += 90
+        # If name is too wide, allow it to shrink slightly
+        if nw > w - margin * 2:
+            _smaller_name_font = _font(120, "bold")
+            nw = _text_w(draw, agent_name, _smaller_name_font)
+            draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=_smaller_name_font)
+            y += 140
+        else:
+            draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=name_font)
+            y += 170
 
-    # --- Brokerage name ---
-    broker_name = (branding.get("broker_name") or "").strip()
-    if broker_name:
-        bw = _text_w(draw, broker_name, broker_font)
-        draw.text(((w - bw) // 2, y), broker_name, fill=(255, 255, 255, 255), font=broker_font)
-        y += 55
+    # --- Space where brokerage name was (kept for layout) ---
+    y += 30
 
     # --- Agent phone in white pill (text vertically centered) ---
+    # --- Agent phone in white pill (doubled to 104px, pill sized to match) ---
     agent_phone = (branding.get("agent_phone") or "").strip()
     if agent_phone:
         tw = _text_w(draw, agent_phone, phone_font)
         th = _text_h(draw, agent_phone, phone_font)
-        pill_w = tw + 100
-        pill_h = th + 40          # generous vertical padding around text
+        pill_w = tw + 140         # wider padding for larger text
+        pill_h = th + 60          # taller padding for larger text
         pill_x = (w - pill_w) // 2
 
         pill = Image.new("RGBA", (pill_w, pill_h), (255, 255, 255, 255))
@@ -969,21 +972,15 @@ def _render_outro(scene: Scene) -> Image.Image:
         text_x = pill_x + (pill_w - text_render_w) // 2
         text_y = y + (pill_h - text_render_h) // 2 - text_y_offset
         draw.text((text_x, text_y), agent_phone, fill=DARK_TEXT, font=phone_font)
-        y += pill_h + 18
+        y += pill_h + 24
 
-    # --- Agent email ---
+    # --- Agent email (doubled to 68px) ---
     agent_email = (branding.get("agent_email") or "").strip()
     if agent_email:
         ew = _text_w(draw, agent_email, email_font)
-        total_w = ew + 44
-        ex = (w - total_w) // 2
-
-        # Envelope icon
-        draw.rectangle((ex, y + 8, ex + 30, y + 26), outline=(255, 255, 255, 255), width=2)
-        draw.line([(ex, y + 8), (ex + 15, y + 19), (ex + 30, y + 8)],
-                  fill=(255, 255, 255, 255), width=2)
-        draw.text((ex + 44, y), agent_email, fill=(255, 255, 255, 255), font=email_font)
-        y += 50
+        ex = (w - ew) // 2
+        draw.text((ex, y), agent_email, fill=(255, 255, 255, 255), font=email_font)
+        y += 85
 
     # --- Toll-free office number ---
     toll_free = "(855) 215-3400"
