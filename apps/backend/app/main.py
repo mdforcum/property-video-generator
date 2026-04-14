@@ -1249,7 +1249,17 @@ def _draw_hero_text_overlay(
 
     bed_part = f"{beds} bedroom" if beds else "home"
     bath_part = f", {baths} bath" if baths else ""
-    headline = f"New to market - {bed_part}{bath_part} in {city} at {address_short}" if address_short else f"New to market - {bed_part}{bath_part} in {city}"
+
+    # Template-specific headline prefix
+    _headline_prefixes = {
+        "new_listing": "New to market",
+        "price_update": "Price update",
+        "under_contract": "Under contract",
+        "sold": "Just sold",
+    }
+    prefix = _headline_prefixes.get(template, "New to market")
+    location = f" in {city} at {address_short}" if address_short else f" in {city}" if city else ""
+    headline = f"{prefix} - {bed_part}{bath_part}{location}"
 
     margin = 80
     max_w = width - margin * 2
