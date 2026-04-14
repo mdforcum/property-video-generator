@@ -34,7 +34,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "videos")
 FRONTEND_ORIGINS = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000")
-DEFAULT_FRONTEND_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*vercel\.app$|^http://localhost(:\d+)?$|^http://127\.0\.0\.1(:\d+)?$"
+DEFAULT_FRONTEND_ORIGIN_REGEX = r"^https://([a-z0-9-]+\.)*vercel\.app$|^https://([a-z0-9-]+\.)*onrender\.com$|^http://localhost(:\d+)?$|^http://127\.0\.0\.1(:\d+)?$"
 FRONTEND_ORIGIN_REGEX = (os.getenv("FRONTEND_ORIGIN_REGEX") or "").strip() or DEFAULT_FRONTEND_ORIGIN_REGEX
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
