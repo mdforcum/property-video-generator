@@ -1019,21 +1019,20 @@ def _render_outro(scene: Scene) -> Image.Image:
     draw.text((tx, y), toll_label, fill=(255, 255, 255, 200), font=toll_label_font)
     draw.text((tx + tlw, y), toll_free, fill=(255, 255, 255, 255), font=toll_free_font)
 
-    # --- Office locations footer (pinned to bottom of frame, doubled size) ---
-    office_line1 = "Visit our offices in Effingham,"
-    office_line2 = "Shelbyville, and Sullivan,"
-    office_line3 = "or online at shelbyrealty.com"
-    office_line_h = 62        # line spacing for 52px font
-
-    footer_y = h - margin - (office_line_h * 3)
-    ol1w = _text_w(draw, office_line1, office_font)
-    draw.text(((w - ol1w) // 2, footer_y), office_line1, fill=(255, 255, 255, 200), font=office_font)
-    footer_y += office_line_h
-    ol2w = _text_w(draw, office_line2, office_font)
-    draw.text(((w - ol2w) // 2, footer_y), office_line2, fill=(255, 255, 255, 200), font=office_font)
-    footer_y += office_line_h
-    ol3w = _text_w(draw, office_line3, office_font)
-    draw.text(((w - ol3w) // 2, footer_y), office_line3, fill=(255, 255, 255, 200), font=office_font)
+    # --- Office locations footer (single line, pinned to bottom, auto-sized) ---
+    offices_text = "Effingham  |  Shelbyville  |  Sullivan"
+    max_footer_w = w - margin * 2
+    footer_size = 72
+    while footer_size > 28:
+        footer_font = _font(footer_size, "bold")
+        if _text_w(draw, offices_text, footer_font) <= max_footer_w:
+            break
+        footer_size -= 4
+    footer_font = _font(footer_size, "bold")
+    ftw = _text_w(draw, offices_text, footer_font)
+    fth = _text_h(draw, offices_text, footer_font)
+    footer_y = h - margin - fth
+    draw.text(((w - ftw) // 2, footer_y), offices_text, fill=(255, 255, 255, 200), font=footer_font)
 
     return canvas.convert("RGB")
 
