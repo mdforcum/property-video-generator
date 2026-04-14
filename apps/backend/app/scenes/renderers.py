@@ -884,18 +884,18 @@ def _render_outro(scene: Scene) -> Image.Image:
     phone_font = _font(52, "bold")
     email_font = _font(34, "regular")
     toll_free_font = _font(44, "bold")
-    office_font = _font(26, "regular")
+    office_font = _font(52, "regular")        # doubled from 26
     margin = 50
-    y = 50
+    y = 40
 
-    # --- Company logo (2x size: 700x280 max) ---
+    # --- Company logo (4x original: 1400x560 max) ---
     broker_logo = branding_assets.get("broker_logo") if branding_assets else None
     if broker_logo is not None:
         logo = broker_logo.copy().convert("RGBA")
-        logo.thumbnail((700, 280), Image.Resampling.LANCZOS)
+        logo.thumbnail((1400, 560), Image.Resampling.LANCZOS)
         logo_x = (w - logo.width) // 2
         canvas.alpha_composite(logo, (logo_x, y))
-        y += logo.height + 30
+        y += logo.height + 20
     else:
         y += 80
 
@@ -903,7 +903,7 @@ def _render_outro(scene: Scene) -> Image.Image:
     divider = Image.new("RGBA", (w - margin * 2, 2), (0, 0, 0, 0))
     ImageDraw.Draw(divider).rectangle((0, 0, divider.width - 1, 1), fill=(255, 255, 255, 100))
     canvas.alpha_composite(divider, (margin, y))
-    y += 30
+    y += 20
 
     # --- Circular agent headshot (500px diameter) ---
     agent_photo = branding_assets.get("agent_photo") if branding_assets else None
@@ -912,7 +912,7 @@ def _render_outro(scene: Scene) -> Image.Image:
         circular = _circular_crop(agent_photo, photo_diameter)
         canvas.alpha_composite(circular, ((w - photo_diameter) // 2, y))
         draw = ImageDraw.Draw(canvas)
-        y += photo_diameter + 30
+        y += photo_diameter + 20
     else:
         y += 40
 
@@ -920,21 +920,22 @@ def _render_outro(scene: Scene) -> Image.Image:
     if agent_name:
         nw = _text_w(draw, agent_name, name_font)
         draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=name_font)
-        y += 95
+        y += 90
 
     # --- Brokerage name ---
     broker_name = (branding.get("broker_name") or "").strip()
     if broker_name:
         bw = _text_w(draw, broker_name, broker_font)
         draw.text(((w - bw) // 2, y), broker_name, fill=(255, 255, 255, 255), font=broker_font)
-        y += 60
+        y += 55
 
-    # --- Agent phone in white pill ---
+    # --- Agent phone in white pill (text vertically centered) ---
     agent_phone = (branding.get("agent_phone") or "").strip()
     if agent_phone:
         tw = _text_w(draw, agent_phone, phone_font)
+        th = _text_h(draw, agent_phone, phone_font)
         pill_w = tw + 100
-        pill_h = 80
+        pill_h = th + 40          # generous vertical padding around text
         pill_x = (w - pill_w) // 2
 
         pill = Image.new("RGBA", (pill_w, pill_h), (255, 255, 255, 255))
@@ -945,11 +946,15 @@ def _render_outro(scene: Scene) -> Image.Image:
         canvas.alpha_composite(pill, (pill_x, y))
         draw = ImageDraw.Draw(canvas)
 
-        # Center text in pill
-        text_x = pill_x + (pill_w - tw) // 2
-        text_y = y + (pill_h - _text_h(draw, agent_phone, phone_font)) // 2
+        # True vertical + horizontal center inside the pill
+        bbox = draw.textbbox((0, 0), agent_phone, font=phone_font)
+        text_render_w = bbox[2] - bbox[0]
+        text_render_h = bbox[3] - bbox[1]
+        text_y_offset = bbox[1]   # top bearing
+        text_x = pill_x + (pill_w - text_render_w) // 2
+        text_y = y + (pill_h - text_render_h) // 2 - text_y_offset
         draw.text((text_x, text_y), agent_phone, fill=DARK_TEXT, font=phone_font)
-        y += pill_h + 20
+        y += pill_h + 18
 
     # --- Agent email ---
     agent_email = (branding.get("agent_email") or "").strip()
@@ -975,17 +980,22 @@ def _render_outro(scene: Scene) -> Image.Image:
     tx = (w - total_toll) // 2
     draw.text((tx, y), toll_label, fill=(255, 255, 255, 200), font=toll_label_font)
     draw.text((tx + tlw, y), toll_free, fill=(255, 255, 255, 255), font=toll_free_font)
-    y += 65
 
-    # --- Office locations footer ---
-    office_line1 = "Visit our offices in Effingham, Shelbyville,"
-    office_line2 = "and Sullivan, or online at shelbyrealty.com"
+    # --- Office locations footer (pinned to bottom of frame, doubled size) ---
+    office_line1 = "Visit our offices in Effingham,"
+    office_line2 = "Shelbyville, and Sullivan,"
+    office_line3 = "or online at shelbyrealty.com"
+    office_line_h = 62        # line spacing for 52px font
 
+    footer_y = h - margin - (office_line_h * 3)
     ol1w = _text_w(draw, office_line1, office_font)
-    draw.text(((w - ol1w) // 2, y), office_line1, fill=(255, 255, 255, 180), font=office_font)
-    y += 36
+    draw.text(((w - ol1w) // 2, footer_y), office_line1, fill=(255, 255, 255, 200), font=office_font)
+    footer_y += office_line_h
     ol2w = _text_w(draw, office_line2, office_font)
-    draw.text(((w - ol2w) // 2, y), office_line2, fill=(255, 255, 255, 180), font=office_font)
+    draw.text(((w - ol2w) // 2, footer_y), office_line2, fill=(255, 255, 255, 200), font=office_font)
+    footer_y += office_line_h
+    ol3w = _text_w(draw, office_line3, office_font)
+    draw.text(((w - ol3w) // 2, footer_y), office_line3, fill=(255, 255, 255, 200), font=office_font)
 
     return canvas.convert("RGB")
 
