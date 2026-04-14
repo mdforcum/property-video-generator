@@ -80,27 +80,48 @@ REEL_OUTRO_SECONDS = max(2.0, float(os.getenv("REEL_OUTRO_SECONDS", "3.0")))
 FRAME_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "new_listing": {
         "label": "NEW LISTING",
+        "hero_label": "JUST\nLISTED",
+        "label_prefix": "New to market",
         "primary": (34, 130, 255, 230),
         "secondary": (100, 190, 255, 220),
         "chip_fill": (16, 84, 196, 220),
+        "banner_fill": (16, 84, 196, 240),
     },
     "price_update": {
         "label": "PRICE UPDATE",
+        "hero_label": "PRICE\nUPDATE",
+        "label_prefix": "Price update",
         "primary": (245, 158, 11, 235),
         "secondary": (251, 191, 36, 220),
         "chip_fill": (180, 83, 9, 220),
+        "banner_fill": (180, 83, 9, 240),
     },
     "under_contract": {
         "label": "UNDER CONTRACT",
+        "hero_label": "UNDER\nCONTRACT",
+        "label_prefix": "Under contract",
         "primary": (139, 92, 246, 235),
         "secondary": (196, 181, 253, 220),
         "chip_fill": (91, 33, 182, 220),
+        "banner_fill": (91, 33, 182, 240),
     },
     "sold": {
         "label": "SOLD",
+        "hero_label": "JUST\nSOLD",
+        "label_prefix": "Just sold",
         "primary": (239, 68, 68, 235),
         "secondary": (252, 165, 165, 220),
         "chip_fill": (153, 27, 27, 225),
+        "banner_fill": (153, 27, 27, 240),
+    },
+    "blank": {
+        "label": "",
+        "hero_label": "",
+        "label_prefix": "",
+        "primary": (0, 0, 0, 0),
+        "secondary": (0, 0, 0, 0),
+        "chip_fill": (0, 0, 0, 0),
+        "banner_fill": (0, 0, 0, 0),
     },
 }
 
@@ -1160,6 +1181,11 @@ def _draw_template_frame(base: Image.Image, template: str) -> None:
     template_key = _normalize_template(template)
     style = FRAME_TEMPLATES[template_key]
 
+    # Blank template — no border or chip
+    label = style["label"]
+    if not label:
+        return
+
     draw = ImageDraw.Draw(base)
     width, height = base.size
     frame_padding = 16
@@ -1182,7 +1208,6 @@ def _draw_template_frame(base: Image.Image, template: str) -> None:
     draw.rounded_rectangle(outer_rect, radius=32, outline=style["primary"], width=10)
     draw.rounded_rectangle(inner_rect, radius=26, outline=style["secondary"], width=3)
 
-    label = style["label"]
     label_font = _load_font(40, bold=True)
     label_bbox = draw.textbbox((0, 0), label, font=label_font)
     label_width = label_bbox[2]
@@ -1225,7 +1250,9 @@ def _draw_hero_text_overlay(
 ) -> List[Image.Image]:
     """Hero overlay split into 2 layers for staggered 'print-on' animation.
 
-    Returns [headline_layer, price_layer] — each a transparent RGBA PNG.
+    Returns [label_and_headline_layer, price_layer] — each a transparent RGBA PNG.
+    Layer 1: bold template banner (JUST LISTED / JUST SOLD etc.) + headline text
+    Layer 2: price pill
     The pipeline overlays them at staggered times for a text-reveal effect.
     """
     ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
@@ -1243,6 +1270,25 @@ def _draw_hero_text_overlay(
     if headline_font is None:
         headline_font = _load_font(82, bold=True)
 
+    # Large banner font for template label (JUST LISTED, JUST SOLD, etc.)
+    banner_font = None
+    for fpath in [
+        ASSETS_DIR / "Poppins-Bold.ttf",
+        Path("/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ]:
+        try:
+            banner_font = ImageFont.truetype(str(fpath), 140)
+            break
+        except (OSError, IOError):
+            continue
+    if banner_font is None:
+        banner_font = _load_font(140, bold=True)
+
+    style = FRAME_TEMPLATES.get(template, FRAME_TEMPLATES["new_listing"])
+    hero_label = style.get("hero_label", "")
+    banner_fill = style.get("banner_fill", (0, 0, 0, 200))
+
     if not city:
         parts = [p.strip() for p in address.split(",")]
         city = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
@@ -1250,44 +1296,88 @@ def _draw_hero_text_overlay(
     bed_part = f"{beds} bedroom" if beds else "home"
     bath_part = f", {baths} bath" if baths else ""
 
-    # Template-specific headline prefix
-    _headline_prefixes = {
-        "new_listing": "New to market",
-        "price_update": "Price update",
-        "under_contract": "Under contract",
-        "sold": "Just sold",
-    }
-    prefix = _headline_prefixes.get(template, "New to market")
-    location = f" in {city} at {address_short}" if address_short else f" in {city}" if city else ""
-    headline = f"{prefix} - {bed_part}{bath_part}{location}"
+    prefix = style.get("label_prefix", "")
+    if prefix:
+        location = f" in {city} at {address_short}" if address_short else f" in {city}" if city else ""
+        headline = f"{prefix} - {bed_part}{bath_part}{location}"
+    else:
+        # Blank template — generic headline with no prefix
+        location = f" in {city} at {address_short}" if address_short else f" in {city}" if city else ""
+        headline = f"{bed_part}{bath_part}{location}".strip(" -")
 
     margin = 80
     max_w = width - margin * 2
 
-    # --- Layer 1: dark tint + headline text ---
+    # --- Layer 1: dark tint + big template banner + headline text ---
     layer1 = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     dark_tint = Image.new("RGBA", (width, height), (0, 0, 0, 60))
     layer1.alpha_composite(dark_tint)
     draw1 = ImageDraw.Draw(layer1)
 
-    lines = _wrap_text(draw1, headline, headline_font, max_w, max_lines=5)
-    line_height = 100
-    total_text_h = len(lines) * line_height + 120
-    start_y = (height - total_text_h) // 2
+    # Calculate total content height to center vertically
+    banner_lines = hero_label.split("\n") if hero_label else []
+    banner_line_height = 160
+    banner_total_h = len(banner_lines) * banner_line_height if banner_lines else 0
 
-    for line in lines:
+    headline_lines = _wrap_text(draw1, headline, headline_font, max_w, max_lines=5)
+    headline_line_height = 100
+    headline_total_h = len(headline_lines) * headline_line_height
+
+    gap_after_banner = 40 if banner_lines else 0
+    total_h = banner_total_h + gap_after_banner + headline_total_h + 120
+    y_cursor = (height - total_h) // 2
+
+    # Draw large template banner text (JUST LISTED, JUST SOLD, etc.)
+    if banner_lines:
+        # Draw colored banner background behind the text
+        banner_pad_x = 50
+        banner_pad_y = 20
+        # Measure widest banner line
+        max_banner_w = 0
+        for bline in banner_lines:
+            bbx = draw1.textbbox((0, 0), bline, font=banner_font)
+            max_banner_w = max(max_banner_w, bbx[2] - bbx[0])
+
+        bg_x1 = margin - banner_pad_x
+        bg_y1 = y_cursor - banner_pad_y
+        bg_x2 = margin + max_banner_w + banner_pad_x
+        bg_y2 = y_cursor + banner_total_h + banner_pad_y
+
+        # Banner background with rounded corners
+        banner_bg = Image.new("RGBA", (bg_x2 - bg_x1, bg_y2 - bg_y1), (0, 0, 0, 0))
+        banner_bg_draw = ImageDraw.Draw(banner_bg)
+        banner_bg_draw.rounded_rectangle(
+            (0, 0, banner_bg.width - 1, banner_bg.height - 1),
+            radius=24, fill=banner_fill,
+        )
+        layer1.alpha_composite(banner_bg, (max(0, bg_x1), max(0, bg_y1)))
+        draw1 = ImageDraw.Draw(layer1)  # refresh after composite
+
+        # Draw each line of banner text
+        for bline in banner_lines:
+            draw1.text(
+                (margin, y_cursor), bline,
+                fill=(255, 255, 255, 255), font=banner_font,
+                stroke_width=4, stroke_fill=(0, 0, 0, 140),
+            )
+            y_cursor += banner_line_height
+
+        y_cursor += gap_after_banner
+
+    # Draw headline text below the banner
+    for line in headline_lines:
         draw1.text(
-            (margin, start_y), line,
+            (margin, y_cursor), line,
             fill=(255, 255, 255, 255), font=headline_font,
             stroke_width=3, stroke_fill=(0, 0, 0, 100),
         )
-        start_y += line_height
+        y_cursor += headline_line_height
 
     # --- Layer 2: price pill (appears after headline) ---
     layer2 = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw2 = ImageDraw.Draw(layer2)
 
-    price_y = start_y + 10
+    price_y = y_cursor + 10
 
     # Measure price text precisely
     pbbox = draw2.textbbox((0, 0), price, font=headline_font)
@@ -1319,8 +1409,7 @@ def _draw_hero_text_overlay(
         stroke_width=1, stroke_fill=(0, 0, 0, 60),
     )
 
-    # NOTE: Counter effect removed — each extra FFmpeg overlay adds ~500 MB
-    # and Render Standard only has 2 GB. Keeping 2 overlays (headline + price).
+    # NOTE: Keeping exactly 2 overlays to stay within Render 2GB memory limit.
     return [layer1, layer2]
 
 

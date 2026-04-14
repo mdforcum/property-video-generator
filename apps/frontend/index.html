@@ -21,6 +21,7 @@
       --accent-gold: #f59e0b;
       --accent-purple: #8b5cf6;
       --accent-red: #ef4444;
+      --accent-gray: #6b7280;
       --radius: 12px;
     }
 
@@ -125,6 +126,11 @@
       color: var(--accent-red);
       background: rgba(239, 68, 68, 0.1);
     }
+    .template-pill[data-template="blank"].active {
+      border-color: var(--accent-gray);
+      color: var(--accent-gray);
+      background: rgba(107, 114, 128, 0.1);
+    }
 
     /* --- Input group --- */
     .input-group {
@@ -165,6 +171,7 @@
     .generate-btn.gold { background: var(--accent-gold); color: #1a1a1a; }
     .generate-btn.purple { background: var(--accent-purple); }
     .generate-btn.red { background: var(--accent-red); }
+    .generate-btn.gray { background: var(--accent-gray); }
     .generate-btn:hover { opacity: 0.9; transform: translateY(-1px); }
     .generate-btn:active { transform: translateY(0); }
     .generate-btn:disabled {
@@ -312,6 +319,7 @@
       <button class="template-pill" data-template="price_update">Price Update</button>
       <button class="template-pill" data-template="under_contract">Under Contract</button>
       <button class="template-pill" data-template="sold">Sold</button>
+      <button class="template-pill" data-template="blank">Blank</button>
     </div>
 
     <!-- Input + generate -->
@@ -376,6 +384,7 @@ const btnColorMap = {
   price_update: "gold",
   under_contract: "purple",
   sold: "red",
+  blank: "gray",
 };
 
 const accentColorMap = {
@@ -383,6 +392,7 @@ const accentColorMap = {
   price_update: "var(--accent-gold)",
   under_contract: "var(--accent-purple)",
   sold: "var(--accent-red)",
+  blank: "var(--accent-gray)",
 };
 
 // Template selection
