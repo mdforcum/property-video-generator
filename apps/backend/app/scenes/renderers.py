@@ -930,18 +930,44 @@ def _render_outro(scene: Scene) -> Image.Image:
     else:
         y += 40
 
-    # --- Agent name (doubled to 160px) ---
+    # --- Agent name (always 2 lines, width-responsive) ---
     if agent_name:
-        nw = _text_w(draw, agent_name, name_font)
-        # If name is too wide, allow it to shrink slightly
-        if nw > w - margin * 2:
-            _smaller_name_font = _font(120, "bold")
-            nw = _text_w(draw, agent_name, _smaller_name_font)
-            draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=_smaller_name_font)
-            y += 140
+        max_name_w = w - margin * 2
+        # Split name into 2 lines: first name(s) on line 1, last name on line 2
+        name_parts = agent_name.strip().split()
+        if len(name_parts) >= 3:
+            # e.g. "Theresa Ann Nuxoll" → "Theresa Ann" / "Nuxoll"
+            line1 = " ".join(name_parts[:-1])
+            line2 = name_parts[-1]
+        elif len(name_parts) == 2:
+            line1 = name_parts[0]
+            line2 = name_parts[1]
         else:
-            draw.text(((w - nw) // 2, y), agent_name, fill=(255, 255, 255, 255), font=name_font)
-            y += 170
+            line1 = agent_name
+            line2 = ""
+
+        # Find largest font size where both lines fit within max width
+        name_size = 160
+        while name_size > 60:
+            trial_font = _font(name_size, "bold")
+            w1 = _text_w(draw, line1, trial_font)
+            w2 = _text_w(draw, line2, trial_font) if line2 else 0
+            if max(w1, w2) <= max_name_w:
+                break
+            name_size -= 8
+        chosen_font = _font(name_size, "bold")
+        line_gap = int(name_size * 1.15)
+
+        # Draw line 1 centered
+        l1w = _text_w(draw, line1, chosen_font)
+        draw.text(((w - l1w) // 2, y), line1, fill=(255, 255, 255, 255), font=chosen_font)
+        y += line_gap
+
+        # Draw line 2 centered (if exists)
+        if line2:
+            l2w = _text_w(draw, line2, chosen_font)
+            draw.text(((w - l2w) // 2, y), line2, fill=(255, 255, 255, 255), font=chosen_font)
+            y += line_gap
 
     # --- Space where brokerage name was (kept for layout) ---
     y += 30
