@@ -172,8 +172,16 @@ def _gradient_tint_on_photo(photo: Image.Image, w: int = CANVAS_W, h: int = CANV
 
 
 def _circular_crop(img: Image.Image, diameter: int) -> Image.Image:
-    """Crop an image into a circle."""
-    img = img.copy().convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
+    """Crop an image into a circle, center-cropping to square first to preserve aspect ratio."""
+    img = img.copy().convert("RGBA")
+    iw, ih = img.size
+    # Center-crop to square before resizing to avoid distortion
+    if iw != ih:
+        side = min(iw, ih)
+        left = (iw - side) // 2
+        top = (ih - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+    img = img.resize((diameter, diameter), Image.Resampling.LANCZOS)
     mask = Image.new("L", (diameter, diameter), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, diameter - 1, diameter - 1), fill=255)
     img.putalpha(mask)
@@ -888,11 +896,18 @@ def _render_outro(scene: Scene) -> Image.Image:
     margin = 50
     y = 40
 
-    # --- Company logo (4x original: 1400x560 max) ---
+    # --- Company logo (scaled to fill ~90% width, maintain aspect ratio) ---
     broker_logo = branding_assets.get("broker_logo") if branding_assets else None
     if broker_logo is not None:
         logo = broker_logo.copy().convert("RGBA")
-        logo.thumbnail((1400, 560), Image.Resampling.LANCZOS)
+        target_w = int(w * 0.9)   # 90% of canvas width (972px on 1080)
+        target_h = 400             # max height cap
+        # Scale to fit within target box, preserving aspect ratio
+        orig_w, orig_h = logo.size
+        scale = min(target_w / max(1, orig_w), target_h / max(1, orig_h))
+        new_w = max(1, int(orig_w * scale))
+        new_h = max(1, int(orig_h * scale))
+        logo = logo.resize((new_w, new_h), Image.Resampling.LANCZOS)
         logo_x = (w - logo.width) // 2
         canvas.alpha_composite(logo, (logo_x, y))
         y += logo.height + 20
