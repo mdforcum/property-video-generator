@@ -22,6 +22,59 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+def extract_preloaded_state(html: str) -> Optional[Dict[str, Any]]:
+    """Extract and parse window.__PRELOADED_STATE__ JSON from page HTML."""
+    marker = "__PRELOADED_STATE__"
+    marker_index = html.find(marker)
+    if marker_index < 0:
+        return None
+
+    assign_index = html.find("=", marker_index)
+    if assign_index < 0:
+        return None
+
+    json_start = html.find("{", assign_index)
+    if json_start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(json_start, len(html)):
+        ch = html[i]
+
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                payload = html[json_start:i + 1]
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    logger.warning("Failed to parse __PRELOADED_STATE__: %s", exc)
+                    return None
+                if isinstance(parsed, dict):
+                    return parsed
+                return None
+
+    logger.warning("Could not locate end of __PRELOADED_STATE__ payload")
+    return None
+
+
 # ============================================================================
 # STATS EXTRACTION
 # ============================================================================
@@ -392,15 +445,9 @@ def enrich_listing_data(
     }
 
     # Parse __PRELOADED_STATE__
-    state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;", html, re.DOTALL)
-    if not state_match:
+    state = extract_preloaded_state(html)
+    if not state:
         logger.info("No __PRELOADED_STATE__ found — enrichment unavailable")
-        return result
-
-    try:
-        state = json.loads(state_match.group(1))
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse __PRELOADED_STATE__: %s", e)
         return result
 
     listings = state.get("listings", {})
