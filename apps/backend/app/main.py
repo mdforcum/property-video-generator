@@ -12,7 +12,7 @@ import random
 import hashlib
 from functools import lru_cache
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -58,6 +58,7 @@ MAX_SOURCE_IMAGES = max(1, int(os.getenv("MAX_SOURCE_IMAGES", "5")))
 MAX_JOB_SECONDS = max(60, int(os.getenv("MAX_JOB_SECONDS", "420")))
 FFMPEG_TIMEOUT_SECONDS = max(30, int(os.getenv("FFMPEG_TIMEOUT_SECONDS", "360")))
 MAX_CONCURRENT_GENERATIONS = max(1, int(os.getenv("MAX_CONCURRENT_GENERATIONS", "1")))
+MAX_JSON_LD_DEPTH = max(1, int(os.getenv("MAX_JSON_LD_DEPTH", "12")))
 STALE_JOB_SECONDS = max(
     MAX_JOB_SECONDS + 60,
     int(os.getenv("STALE_JOB_SECONDS", str(MAX_JOB_SECONDS + 120))),
@@ -195,7 +196,7 @@ app = FastAPI(title="Property Video Generator API")
 # ============================================================================
 
 from app.scenes import Scene, SceneType, MotionProfile, render_scene_frame, build_scene_list
-from app.scenes.enrichment import enrich_listing_data
+from app.scenes.enrichment import enrich_listing_data, extract_preloaded_state
 
 
 def _normalize_origin(origin: str) -> str:
@@ -644,32 +645,22 @@ def _format_price(value: object) -> str:
     return "Contact for Price"
 
 
-def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
-    if "shelbyrealty" not in url or "/idx/" not in url:
+def _extract_shelby_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
+    if "shelbyrealty" not in url:
         logger.info("Shelby extractor: URL guard failed for %s", url)
         return None
 
-    logger.info("Shelby extractor: URL matched, HTML length=%d, __PRELOADED_STATE__ present=%s",
-                len(html), "__PRELOADED_STATE__" in html)
+    logger.info(
+        "Shelby extractor: URL matched, HTML length=%d, __PRELOADED_STATE__ present=%s",
+        len(html), "__PRELOADED_STATE__" in html
+    )
 
-    state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.*?\})\s*;", html, re.DOTALL)
-    if not state_match:
-        # Try alternate pattern — some pages use window.__PRELOADED_STATE__
-        state_match = re.search(r"__PRELOADED_STATE__\s*=\s*(\{.+\})\s*;", html, re.DOTALL)
-        if not state_match:
-            logger.warning("Shelby extractor: __PRELOADED_STATE__ regex did not match (present in html: %s)",
-                           "__PRELOADED_STATE__" in html)
-            # Log a snippet of HTML around __PRELOADED_STATE__ if it exists
-            idx = html.find("__PRELOADED_STATE__")
-            if idx >= 0:
-                snippet = html[max(0, idx - 20):idx + 200]
-                logger.warning("Shelby extractor: HTML snippet around __PRELOADED_STATE__: %.300s", snippet)
-            return None
-
-    try:
-        state = json.loads(state_match.group(1))
-    except json.JSONDecodeError as e:
-        logger.warning("Shelby extractor: JSON parse failed: %s (matched length=%d)", e, len(state_match.group(1)))
+    state = extract_preloaded_state(html)
+    if not state:
+        logger.warning(
+            "Shelby extractor: unable to parse __PRELOADED_STATE__ (present in html: %s)",
+            "__PRELOADED_STATE__" in html,
+        )
         return None
 
     listings = state.get("listings") or {}
@@ -853,7 +844,7 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
         response.raise_for_status()
         html = response.text
 
-    shelby_data = _extract_shelby_idx_listing(url, html)
+    shelby_data = _extract_shelby_listing(url, html)
     if shelby_data:
         return shelby_data
 
@@ -871,18 +862,67 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
     price = price_match.group(0).replace(" ", "") if price_match else "Contact for Price"
 
     images: List[str] = []
+
+    def _add_image_candidate(raw_url: Optional[str]) -> None:
+        if not raw_url:
+            return
+        candidate = str(raw_url).strip()
+        if not candidate:
+            return
+        if candidate.startswith("data:") or candidate.startswith("javascript:"):
+            return
+        absolute = urljoin(url, candidate)
+        if absolute.startswith("http://") or absolute.startswith("https://"):
+            images.append(absolute)
+
+    def _collect_images_from_json(value: Any, depth: int = 0) -> None:
+        if depth >= MAX_JSON_LD_DEPTH:
+            logger.debug("JSON-LD traversal depth limit reached at depth=%s", depth)
+            return
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key).lower() == "image":
+                    if isinstance(nested, list):
+                        for item in nested:
+                            _add_image_candidate(item)
+                    else:
+                        _add_image_candidate(nested)
+                _collect_images_from_json(nested, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                _collect_images_from_json(item, depth + 1)
+
     og_image = soup.find("meta", {"property": "og:image"})
     if og_image and og_image.get("content"):
-        images.append(og_image["content"])
+        _add_image_candidate(og_image["content"])
+    og_image_secure = soup.find("meta", {"property": "og:image:secure_url"})
+    if og_image_secure and og_image_secure.get("content"):
+        _add_image_candidate(og_image_secure["content"])
+    twitter_image = soup.find("meta", {"name": "twitter:image"})
+    if twitter_image and twitter_image.get("content"):
+        _add_image_candidate(twitter_image["content"])
+
+    for script_tag in soup.find_all("script", {"type": "application/ld+json"}):
+        script_text = (script_tag.string or script_tag.get_text() or "").strip()
+        if not script_text:
+            continue
+        try:
+            payload = json.loads(script_text)
+        except json.JSONDecodeError as exc:
+            logger.debug("Skipping invalid JSON-LD block: %s", exc)
+            continue
+        _collect_images_from_json(payload)
 
     for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src")
-        if not src:
-            continue
-        if src.startswith("//"):
-            src = "https:" + src
-        if src.startswith("http"):
-            images.append(src)
+        for attr in ("src", "data-src", "data-lazy-src", "data-original", "data-image", "data-url"):
+            _add_image_candidate(img.get(attr))
+        srcset = img.get("srcset") or img.get("data-srcset")
+        if srcset:
+            for part in srcset.split(","):
+                candidate = part.strip()
+                if not candidate:
+                    continue
+                _add_image_candidate(candidate.split(" ")[0])
 
     seen = set()
     unique = []
