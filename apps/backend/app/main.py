@@ -690,14 +690,68 @@ def _extract_shelby_listing(url: str, html: str) -> Optional[Tuple[str, str, Lis
 
     mls_id = (listing.get("mlsId") or "").strip()
     mls_no = str(listing.get("mlsNo") or "").strip()
-    photo_codes = [str(code).strip() for code in (listing.get("photos") or []) if str(code).strip()]
+    image_urls: List[str] = []
+
+    def _add_image_url_candidate(raw_url: Any) -> None:
+        if not isinstance(raw_url, str):
+            return
+        candidate = raw_url.strip()
+        if not candidate:
+            return
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            image_urls.append(candidate)
+
+    def _collect_image_urls(value: Any, depth: int = 0) -> None:
+        if depth >= MAX_JSON_LD_DEPTH:
+            return
+        if isinstance(value, str):
+            _add_image_url_candidate(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _collect_image_urls(item, depth + 1)
+            return
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key).lower() in {
+                    "url", "src", "href", "image", "photo", "original",
+                    "large", "medium", "small", "full", "fullsize", "photourl"
+                }:
+                    _collect_image_urls(nested, depth + 1)
+                elif "image" in str(key).lower() or "photo" in str(key).lower():
+                    _collect_image_urls(nested, depth + 1)
+                else:
+                    _collect_image_urls(nested, depth + 1)
+
+    # First try explicit URL-bearing fields used by some IDX payload variants.
+    for field in [
+        "imageUrls", "photoUrls", "images", "gallery", "media", "listingImages", "photosFull"
+    ]:
+        _collect_image_urls(listing.get(field))
+
+    # Then derive CDN URLs from photo codes when present.
+    raw_photos = listing.get("photos") or []
+    photo_codes: List[str] = []
+    for item in raw_photos if isinstance(raw_photos, list) else [raw_photos]:
+        if isinstance(item, dict):
+            _collect_image_urls(item)
+            raw_code = _first_present(item, ["code", "photoCode", "id", "photoId", "name", "value"])
+            if raw_code not in (None, "", [], {}):
+                photo_codes.append(str(raw_code).strip())
+        else:
+            raw_value = str(item).strip()
+            if not raw_value:
+                continue
+            if raw_value.startswith("http://") or raw_value.startswith("https://"):
+                image_urls.append(raw_value)
+            else:
+                photo_codes.append(raw_value)
 
     version = ""
     photos_date = str(listing.get("photosDate") or "").strip()
     if photos_date:
         version = photos_date.replace(" ", "_").replace(":", "")
 
-    image_urls: List[str] = []
     if mls_id and mls_no and photo_codes:
         base = f"https://idx-photos-ihouseprd.b-cdn.net/{mls_id}/{mls_no}/org"
         for code in photo_codes:
@@ -705,6 +759,29 @@ def _extract_shelby_listing(url: str, html: str) -> Optional[Tuple[str, str, Lis
             if version:
                 img_url = f"{img_url}?v={version}&width=1280&height=960"
             image_urls.append(img_url)
+
+    # Last resort: if listing selection mismatched, scan all listings for matching MLS IDs.
+    if not image_urls and mls_id and mls_no and isinstance(listings, dict):
+        for candidate in listings.values():
+            if not isinstance(candidate, dict):
+                continue
+            if str(candidate.get("mlsId") or "").strip() != mls_id:
+                continue
+            if str(candidate.get("mlsNo") or "").strip() != mls_no:
+                continue
+            for field in ["imageUrls", "photoUrls", "images", "gallery", "media", "listingImages", "photosFull"]:
+                _collect_image_urls(candidate.get(field))
+            break
+
+    # Deduplicate while preserving order.
+    seen_urls: set[str] = set()
+    unique_image_urls: List[str] = []
+    for image_url in image_urls:
+        if image_url in seen_urls:
+            continue
+        seen_urls.add(image_url)
+        unique_image_urls.append(image_url)
+    image_urls = unique_image_urls
 
     logger.info("Shelby extractor: mls_id=%s, mls_no=%s, photo_codes=%d, image_urls=%d",
                 mls_id, mls_no, len(photo_codes), len(image_urls))
@@ -932,7 +1009,13 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
             unique.append(image_url)
 
     if not unique:
-        raise ValueError("No images found")
+        img_tag_count = len(soup.find_all("img"))
+        json_ld_count = len(soup.find_all("script", {"type": "application/ld+json"}))
+        preloaded_state_present = "__PRELOADED_STATE__" in html
+        raise ValueError(
+            "No images found "
+            f"(img_tags={img_tag_count}, json_ld={json_ld_count}, preloaded_state={preloaded_state_present})"
+        )
     branding = _apply_agent_directory_fallback({
         "agent_name": "",
         "agent_phone": "",
