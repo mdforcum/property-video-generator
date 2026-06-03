@@ -20,6 +20,7 @@ import requests
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+MAX_PRELOADED_SCAN_CHARS = 2_000_000
 
 
 def extract_preloaded_state(html: str) -> Optional[Dict[str, Any]]:
@@ -41,7 +42,8 @@ def extract_preloaded_state(html: str) -> Optional[Dict[str, Any]]:
     in_string = False
     escape_next = False
 
-    for i in range(json_start, len(html)):
+    scan_limit = min(len(html), json_start + MAX_PRELOADED_SCAN_CHARS)
+    for i in range(json_start, scan_limit):
         ch = html[i]
 
         if escape_next:
@@ -50,7 +52,7 @@ def extract_preloaded_state(html: str) -> Optional[Dict[str, Any]]:
         if ch == "\\":
             escape_next = True
             continue
-        if ch == '"' and not escape_next:
+        if ch == '"':
             in_string = not in_string
             continue
         if in_string:
@@ -71,7 +73,9 @@ def extract_preloaded_state(html: str) -> Optional[Dict[str, Any]]:
                     return parsed
                 return None
 
-    logger.warning("Could not locate end of __PRELOADED_STATE__ payload")
+    logger.warning(
+        f"Could not locate end of __PRELOADED_STATE__ payload within {MAX_PRELOADED_SCAN_CHARS:_} chars"
+    )
     return None
 
 

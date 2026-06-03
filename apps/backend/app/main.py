@@ -58,6 +58,7 @@ MAX_SOURCE_IMAGES = max(1, int(os.getenv("MAX_SOURCE_IMAGES", "5")))
 MAX_JOB_SECONDS = max(60, int(os.getenv("MAX_JOB_SECONDS", "420")))
 FFMPEG_TIMEOUT_SECONDS = max(30, int(os.getenv("FFMPEG_TIMEOUT_SECONDS", "360")))
 MAX_CONCURRENT_GENERATIONS = max(1, int(os.getenv("MAX_CONCURRENT_GENERATIONS", "1")))
+MAX_JSON_LD_DEPTH = max(1, int(os.getenv("MAX_JSON_LD_DEPTH", "12")))
 STALE_JOB_SECONDS = max(
     MAX_JOB_SECONDS + 60,
     int(os.getenv("STALE_JOB_SECONDS", str(MAX_JOB_SECONDS + 120))),
@@ -644,7 +645,7 @@ def _format_price(value: object) -> str:
     return "Contact for Price"
 
 
-def _extract_shelby_idx_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
+def _extract_shelby_listing(url: str, html: str) -> Optional[Tuple[str, str, List[str], Dict[str, str]]]:
     if "shelbyrealty" not in url:
         logger.info("Shelby extractor: URL guard failed for %s", url)
         return None
@@ -843,7 +844,7 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
         response.raise_for_status()
         html = response.text
 
-    shelby_data = _extract_shelby_idx_listing(url, html)
+    shelby_data = _extract_shelby_listing(url, html)
     if shelby_data:
         return shelby_data
 
@@ -874,7 +875,10 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
         if absolute.startswith("http://") or absolute.startswith("https://"):
             images.append(absolute)
 
-    def _collect_images_from_json(value: Any) -> None:
+    def _collect_images_from_json(value: Any, depth: int = 0) -> None:
+        if depth >= MAX_JSON_LD_DEPTH:
+            logger.debug("JSON-LD traversal depth limit reached at depth=%s", depth)
+            return
         if isinstance(value, dict):
             for key, nested in value.items():
                 if str(key).lower() == "image":
@@ -883,10 +887,10 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
                             _add_image_candidate(item)
                     else:
                         _add_image_candidate(nested)
-                _collect_images_from_json(nested)
+                _collect_images_from_json(nested, depth + 1)
         elif isinstance(value, list):
             for item in value:
-                _collect_images_from_json(item)
+                _collect_images_from_json(item, depth + 1)
 
     og_image = soup.find("meta", {"property": "og:image"})
     if og_image and og_image.get("content"):
@@ -904,7 +908,8 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
             continue
         try:
             payload = json.loads(script_text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.debug("Skipping invalid JSON-LD block: %s", exc)
             continue
         _collect_images_from_json(payload)
 
@@ -914,7 +919,10 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
         srcset = img.get("srcset") or img.get("data-srcset")
         if srcset:
             for part in srcset.split(","):
-                _add_image_candidate(part.strip().split(" ")[0])
+                candidate = part.strip()
+                if not candidate:
+                    continue
+                _add_image_candidate(candidate.split(" ")[0])
 
     seen = set()
     unique = []
