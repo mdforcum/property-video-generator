@@ -2092,7 +2092,36 @@ def process_video_task(
         html_response.raise_for_status()
         raw_html = html_response.text
 
-        address, price, image_urls, branding = scrape_listing(url, html=raw_html)
+        logger.info("Job %s fetched listing HTML: length=%d, has_preloaded_state=%s", job_id, len(raw_html), "__PRELOADED_STATE__" in raw_html)
+        if len(raw_html) < 1000 or any(m in raw_html.lower() for m in ("just a moment", "captcha", "access denied", "cf-browser-verification")):
+            logger.warning("Job %s listing fetch looks like a challenge/blocked page (length=%d). Snippet: %s", job_id, len(raw_html), raw_html[:500])
+        try:
+            address, price, image_urls, branding = scrape_listing(url, html=raw_html)
+        except ValueError as scrape_err:
+            if "No images found" not in str(scrape_err):
+                raise
+            logger.warning("Job %s primary scrape found no images; trying fallback extractor. html_length=%d, has_preloaded_state=%s, snippet=%s", job_id, len(raw_html), "__PRELOADED_STATE__" in raw_html, raw_html[:500])
+            _fb_soup = BeautifulSoup(raw_html, "html.parser")
+            _fb_urls = []
+            for _m in _fb_soup.find_all("meta", property="og:image"):
+                _c = _m.get("content")
+                if _c:
+                    _fb_urls.append(_c)
+            for _img in _fb_soup.find_all("img"):
+                _src = _img.get("src") or _img.get("data-src") or _img.get("data-lazy-src")
+                if _src and _src.startswith("http") and not _src.lower().endswith(".svg"):
+                    _fb_urls.append(_src)
+            _seen = set()
+            image_urls = []
+            for _u in _fb_urls:
+                _abs = urljoin(url, _u)
+                if _abs not in _seen:
+                    _seen.add(_abs)
+                    image_urls.append(_abs)
+            if not image_urls:
+                raise ValueError("Listing fetch returned no usable images (has_preloaded_state=%s). The source page may be a JS-rendered shell or a bot-protection page." % ("__PRELOADED_STATE__" in raw_html))
+            address, price, branding = url, "Contact for Price", {}
+            logger.info("Job %s fallback extractor recovered %d image(s)", job_id, len(image_urls))
         image_urls = image_urls[:MAX_SOURCE_IMAGES]
         update_job(job_id, "processing", None, None, branding=branding)
 
