@@ -949,6 +949,97 @@ def scrape_listing(url: str, html: Optional[str] = None) -> Tuple[str, str, List
     return address, price, unique, branding
 
 
+def _fetch_listing_html(url: str, job_id: Optional[str] = None) -> str:
+    """Fetch listing HTML using a warm session.
+
+    Many MLS/IDX sites (e.g. IDX Broker) gate the first stateless request behind a
+    cookie/JS challenge and return a tiny shell that lacks __PRELOADED_STATE__ and any
+    images. Visiting the site root first to pick up the session cookie, then re-using
+    that session for the listing request, usually returns the fully rendered HTML.
+    Falls back to a plain request if the warm-up fails.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
+
+    session = requests.Session()
+    session.headers.update(headers)
+
+    # Warm up: hit the site origin so the session picks up any challenge/session cookie.
+    try:
+        site_root = urljoin(url, "/")
+        if site_root:
+            session.get(site_root, timeout=15)
+    except requests.RequestException as exc:
+        logger.info("Job %s warm-up request failed (continuing): %s", job_id, exc)
+
+    last_exc: Optional[Exception] = None
+    raw_html = ""
+    for attempt in range(2):
+        try:
+            response = session.get(
+                url,
+                headers={"Referer": urljoin(url, "/")},
+                timeout=25,
+            )
+            response.raise_for_status()
+            raw_html = response.text
+        except requests.RequestException as exc:
+            last_exc = exc
+            time.sleep(1.0 + attempt)
+            continue
+
+        # If we got the real (large) page with preloaded state, stop early.
+        if len(raw_html) >= 1000 and "__PRELOADED_STATE__" in raw_html:
+            return raw_html
+        time.sleep(0.5)
+
+    if not raw_html and last_exc is not None:
+        raise last_exc
+    return raw_html
+
+
+# Public photo CDN used by IDX Broker / iHouse listings (no auth required).
+IDX_PHOTO_CDN = "https://idx-photos-ihouseprd.b-cdn.net"
+# Upper bound on photos to probe when reconstructing from a bare listing URL.
+IDX_MAX_PHOTO_PROBE = max(1, int(os.getenv("IDX_MAX_PHOTO_PROBE", "60")))
+
+
+def _reconstruct_idx_images_from_url(url: str) -> List[str]:
+    """Reconstruct IDX/iHouse listing image URLs straight from the listing URL.
+
+    IDX Broker listing URLs look like /idx/listing/<mlsId>/<mlsNo>/<slug> and the
+    photo CDN serves images at <cdn>/<mlsId>/<mlsNo>/org/<NNN>.jpg with zero-padded
+    sequential codes. When the page itself is an un-rendered shell we can still build
+    candidate image URLs from these keys; non-existent codes are skipped downstream
+    because each download is attempted independently.
+    """
+    match = re.search(r"/idx/listing/([^/]+)/([^/?#]+)", url)
+    if not match:
+        return []
+
+    mls_id = match.group(1).strip()
+    mls_no = match.group(2).strip()
+    if not mls_id or not mls_no:
+        return []
+
+    base = f"{IDX_PHOTO_CDN}/{mls_id}/{mls_no}/org"
+    return [
+        f"{base}/{idx:03d}.jpg?width=1280&height=960"
+        for idx in range(IDX_MAX_PHOTO_PROBE)
+    ]
+
+
 def download_image(url: str, out_path: Path) -> None:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -2084,13 +2175,9 @@ def process_video_task(
         _set_step("scrape_listing")
         _set_job_progress(job_id, 12)
         # Fetch HTML once — used by both scrape_listing and enrichment
-        html_response = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5",
-        }, timeout=25)
-        html_response.raise_for_status()
-        raw_html = html_response.text
+        # Fetch with a warm session so cookie/JS challenge pages (e.g. IDX Broker)
+        # return the real listing HTML instead of a tiny bot-protection shell.
+        raw_html = _fetch_listing_html(url, job_id=job_id)
 
         logger.info("Job %s fetched listing HTML: length=%d, has_preloaded_state=%s", job_id, len(raw_html), "__PRELOADED_STATE__" in raw_html)
         if len(raw_html) < 1000 or any(m in raw_html.lower() for m in ("just a moment", "captcha", "access denied", "cf-browser-verification")):
@@ -2118,6 +2205,18 @@ def process_video_task(
                 if _abs not in _seen:
                     _seen.add(_abs)
                     image_urls.append(_abs)
+            # Last resort: the page was a JS/bot-protection shell with no parseable
+            # images. For IDX Broker / iHouse listings the photo CDN is public and the
+            # MLS keys are encoded in the URL, so reconstruct image URLs directly.
+            if not image_urls:
+                _idx_urls = _reconstruct_idx_images_from_url(url)
+                if _idx_urls:
+                    logger.info(
+                        "Job %s reconstructed %d IDX image(s) from listing URL",
+                        job_id, len(_idx_urls),
+                    )
+                    image_urls = _idx_urls
+
             if not image_urls:
                 raise ValueError("Listing fetch returned no usable images (has_preloaded_state=%s). The source page may be a JS-rendered shell or a bot-protection page." % ("__PRELOADED_STATE__" in raw_html))
             address, price, branding = url, "Contact for Price", {}
